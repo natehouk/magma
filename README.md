@@ -6,7 +6,7 @@ Part of **[Epsilon Audio](https://github.com/natehouk/epsilon-plugins)**, a fami
 
 ![Magma](screenshot.png)
 
-Magma is a clean-room design with the feature set of FabFilter Saturn, FabFilter's tenth plugin (March 2012). It was written from scratch, working only from FabFilter's public release announcement and contemporary reviews. No FabFilter code, binaries, presets, artwork or trademarks were used.
+Magma is a clean-room design with the feature set of FabFilter Saturn, FabFilter's eleventh plugin (March 2012). It was written from scratch, working only from FabFilter's public release announcement and contemporary reviews. No FabFilter code, binaries, presets, artwork or trademarks were used.
 
 It is part of a family of plugins:
 - [Monolith](https://github.com/natehouk/monolith) (synth)
