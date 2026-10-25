@@ -3,10 +3,13 @@
 // TPT state-variable filters (Zavalishin; shelving/bell responses after Simper's published SVF
 // formulas) with allpass phase compensation, static and stateful waveshapers (tanh, cubic, rectifier,
 // wavefolder, bit/rate reduction, granular smear), envelope followers, ADSR envelopes, step LFOs,
-// windowed-sinc halfband oversampling. No third-party product code, assets or disassembly were used.
+// windowed-sinc halfband oversampling (2x, 8x, 32x), linear-phase FIR band splitting (frequency-sampled
+// Linkwitz-Riley magnitudes, partitioned FFT convolution). No third-party product code, assets or disassembly were used.
 // License: MIT (see LICENSE).
 
 #pragma once
+#include "common/Halfband.hpp"
+#include "common/Convolver.hpp"
 #include <atomic>
 #include <cmath>
 #include <cstdint>
@@ -21,7 +24,7 @@ inline float clampf(float x, float lo, float hi) { return x < lo ? lo : (x > hi 
 inline float dbToGain(float db) { return std::pow(10.f, db / 20.f); }
 inline float gainToDb(float g) { return 20.f * std::log10(std::max(g, 1e-9f)); }
 
-static constexpr int kMaxBands = 6, kNumStyles = 16, kNumSlots = 50;
+static constexpr int kMaxBands = 6, kNumStyles = 28, kNumStyles1 = 16, kNumSlots = 50;
 static constexpr int kNumXlfo = 4, kNumSteps = 16, kNumEg = 2, kNumEf = 2, kNumXy = 2;
 static constexpr int kCtl = 16;                     // modulation and coefficients update every kCtl samples
 
@@ -41,8 +44,12 @@ enum Param : uint32_t {
     kXyFirst = kEfFirst + kNumEf * kEfFields,
     kSlotFirst = kXyFirst + kNumXy * 2,
     kOutLearn = kSlotFirst + kNumSlots * kSlotFields,
+    // ---- 2.0
+    kXPhase,        // crossover phase: Natural (minimum phase, 1.x) or Linear
+    kSuperb,        // Superb quality: 32x oversampling (overrides High Quality)
     kParamCount
 };
+enum XSlope { kSlope12, kSlope24, kSlope48, kSlope6 };       // append-only: 6 dB/oct came in 2.0
 inline uint32_t bp(int b, int f) { return kBandFirst + b * kBandFields + f; }
 inline uint32_t lp_(int l, int f) { return kXlfoFirst + l * kXlfoFields + f; }
 inline uint32_t ep(int e, int f) { return kEgFirst + e * kEgFields + f; }
@@ -56,7 +63,7 @@ inline Range paramRange(uint32_t p) {
     if (p < kBandFirst) {
         static const Range g[kBandFirst] = {
             { 1, 6, 1, false, true }, { 20, 20000, 120, true, false }, { 20, 20000, 600, true, false }, { 20, 20000, 2500, true, false },
-            { 20, 20000, 6000, true, false }, { 20, 20000, 12000, true, false }, { 0, 2, 1, false, true }, { 0, 1, 0, false, true },
+            { 20, 20000, 6000, true, false }, { 20, 20000, 12000, true, false }, { 0, 3, 1, false, true }, { 0, 1, 0, false, true },
             { 0, 1, 0, false, true }, { 0, 1, 1, false, true }, { 0, 1, 1, false, false }, { -24, 24, 0, false, false }, { 0, 1, 1, false, true } };
         return g[p];
     }
@@ -89,6 +96,7 @@ inline Range paramRange(uint32_t p) {
         static const Range s[kSlotFields] = { { 0, 17, 0, false, true }, { 0, 139, 0, false, true }, { -1, 1, 0, false, false }, { 0, 1, 0, false, true } };
         return s[(p - kSlotFirst) % kSlotFields];
     }
+    if (p == kXPhase || p == kSuperb) return { 0, 1, 0, false, true };
     return { 0, 10000000, 0, false, true };
 }
 inline float normOf(uint32_t p, float v) {
@@ -171,6 +179,7 @@ struct XoverCoef {
     int slope = 1, stages = 2; float g = 0.1f, gOne = 0.1f; float a1[4], a2[4], a3[4], k[4];
     void design(float fc, float fs, int sl) {
         slope = sl; g = std::tan(kPi * clampf(fc, 10.f, 0.45f * fs) / fs); gOne = g / (1.f + g);
+        if (sl == kSlope6) { stages = 0; return; }        // first order: low = one-pole, high = the rest (sums exactly)
         static const float k2[1] = { 2.f }, k4[2] = { 1.41421356f, 1.41421356f }, k8[4] = { 1.84775907f, 0.76536686f, 1.84775907f, 0.76536686f };
         const float* kk = sl == 0 ? k2 : (sl == 1 ? k4 : k8); stages = sl == 0 ? 1 : (sl == 1 ? 2 : 4);
         for (int i = 0; i < stages; ++i) { k[i] = kk[i]; a1[i] = 1.f / (1.f + g * (g + k[i])); a2[i] = g * a1[i]; a3[i] = g * a2[i]; }
@@ -178,8 +187,10 @@ struct XoverCoef {
 };
 struct Split {
     Svf lo[4], hi[4];
-    void reset() { for (int i = 0; i < 4; ++i) { lo[i].reset(); hi[i].reset(); } }
+    void reset() { for (int i = 0; i < 4; ++i) { lo[i].reset(); hi[i].reset(); } z1 = 0; }
+    float z1 = 0;
     inline void process(float x, const XoverCoef& c, float& low, float& high) {
+        if (c.slope == kSlope6) { const float v = (x - z1) * c.gOne, lp = v + z1; z1 = lp + v; low = lp; high = x - lp; return; }
         float l = x, h = x, v1, v2;
         for (int i = 0; i < c.stages; ++i) { lo[i].tick(l, c.a1[i], c.a2[i], c.a3[i], v1, v2); l = v2; }
         for (int i = 0; i < c.stages; ++i) { hi[i].tick(h, c.a1[i], c.a2[i], c.a3[i], v1, v2); h = h - c.k[i] * v1 - v2; }
@@ -190,6 +201,7 @@ struct Allpass {
     Svf s[2]; float z = 0;
     void reset() { s[0].reset(); s[1].reset(); z = 0; }
     inline float process(float x, const XoverCoef& c) {
+        if (c.slope == kSlope6) return x;                  // complementary first-order splits need no compensation
         if (c.slope == 0) { const float v = (x - z) * c.gOne, lp = v + z; z = lp + v; return 2.f * lp - x; }   // first-order allpass
         float v1, v2;
         if (c.slope == 1) { s[0].tick(x, c.a1[0], c.a2[0], c.a3[0], v1, v2); return x - 2.f * c.k[0] * v1; }
@@ -198,73 +210,57 @@ struct Allpass {
     }
 };
 
-// ------------------------------------------------------------------ halfband oversampling (65 taps, Kaiser)
-static constexpr int kHbHalf = 16, kHbC = 2 * kHbHalf;
-inline const float* halfbandTaps() {
-    static float t[kHbHalf]; static bool done = false;
-    if (!done) {
-        done = true;
-        auto bessel0 = [](double x) { double s = 1, term = 1; for (int k = 1; k < 30; ++k) { term *= (x / (2 * k)) * (x / (2 * k)); s += term; } return s; };
-        const double beta = 8.0, N = 2 * kHbC, PI = 3.14159265358979323846; double sum = 0.5;
-        for (int j = 0; j < kHbHalf; ++j) {
-            const int k = 2 * j + 1; const double sinc = std::sin(PI * k / 2.0) / (PI * k / 2.0);
-            const double r = (double)(k + kHbC) / N * 2 - 1, w = bessel0(beta * std::sqrt(std::max(0.0, 1 - r * r))) / bessel0(beta);
-            t[j] = (float)(0.5 * sinc * w); sum += 2 * t[j];
+// ------------------------------------------------------------------ oversampling: 2x (normal), 8x (high quality), 32x (superb)
+// epsilon::OversamplerN gives exactly 1.x's 2x and 8x output; latency in base-rate samples 32 / 56 / 62
+using epsilon::OversamplerN;
+static constexpr int kMaxOs = 32;
+inline int osFactor(const float* p) { return p[kSuperb] > 0.5f ? 32 : (p[kQuality] > 0.5f ? 8 : 2); }
+
+// ------------------------------------------------------------------ linear-phase band split
+// Each band's FIR is the difference of zero-phase Linkwitz-Riley magnitudes |LP(f)| = 1 / (1 + (f/fc)^n), n = 1, 2, 4, 8
+// for 6, 12, 24, 48 dB/oct, sampled on an FFT grid, made causal by half the length and windowed. The bands sum to an
+// exact delay of L/2 samples.
+inline int slopeOrder(int sl) { return sl == kSlope6 ? 1 : (sl == kSlope12 ? 2 : (sl == kSlope24 ? 4 : 8)); }
+inline void designLinearBands(const float* xf, int nb, int sl, float fs, int L, std::vector<std::vector<float>>& h) {
+    const int n = slopeOrder(sl); h.assign(nb, std::vector<float>(L, 0.f));
+    epsilon::Fft f; f.init(L); std::vector<epsilon::cpx> buf(L);
+    auto lp = [&](int i, float hz) { return 1.0 / (1.0 + std::pow(hz / xf[i], (double)n)); };
+    for (int b = 0; b < nb; ++b) {
+        for (int k = 0; k <= L / 2; ++k) {
+            const float hz = (float)k * fs / L;
+            const double hi = b < nb - 1 ? lp(b, hz) : 1.0, lo = b > 0 ? lp(b - 1, hz) : 0.0;
+            const double m = hi - lo;
+            // a linear-phase (delay L/2) response: alternate signs on the grid
+            buf[k] = epsilon::cpx((float)(m * ((k & 1) ? -1.0 : 1.0)), 0.f);
+            if (k > 0 && k < L / 2) buf[L - k] = buf[k];
         }
-        for (int j = 0; j < kHbHalf; ++j) t[j] = (float)(t[j] / sum);
+        f.run(buf.data(), true);
+        for (int i = 0; i < L; ++i) {
+            const double w = 0.42 - 0.5 * std::cos(2 * 3.14159265358979 * i / L) + 0.08 * std::cos(4 * 3.14159265358979 * i / L);   // Blackman
+            h[b][i] = (float)(buf[i].real() * (i == L / 2 ? 1.0 : w));
+        }
     }
-    return t;
+    // the window changes each kernel a little; put the difference back into the last band so the sum stays an exact delay
+    std::vector<double> sum(L, 0.0); for (int b = 0; b < nb; ++b) for (int i = 0; i < L; ++i) sum[i] += h[b][i];
+    for (int i = 0; i < L; ++i) h[nb - 1][i] += (float)((i == L / 2 ? 1.0 : 0.0) - sum[i]);
 }
-struct HbUp {
-    float buf[128] = {}; int pos = 0;
-    void reset() { std::memset(buf, 0, sizeof buf); pos = 0; }
-    inline void process(float x, float& y0, float& y1) {
-        pos = (pos + 1) & 63; buf[pos] = buf[pos + 64] = x;
-        const float* h = halfbandTaps(); const float* b = buf + pos + 64;
-        y0 = b[-kHbHalf]; float s = 0;
-        for (int j = 0; j < kHbHalf; ++j) s += h[j] * (b[-kHbHalf - j] + b[-kHbHalf + j + 1]);
-        y1 = 2.f * s;
-    }
-};
-struct HbDown {
-    float buf[256] = {}; int pos = 0;
-    void reset() { std::memset(buf, 0, sizeof buf); pos = 0; }
-    inline float process(float x0, float x1) {
-        pos = (pos + 1) & 127; buf[pos] = buf[pos + 128] = x0;
-        pos = (pos + 1) & 127; buf[pos] = buf[pos + 128] = x1;
-        const float* h = halfbandTaps(); const float* c = buf + pos + 128 - kHbC - 1;
-        float s = 0.5f * c[0];
-        for (int j = 0; j < kHbHalf; ++j) s += h[j] * (c[-(2 * j + 1)] + c[2 * j + 1]);
-        return s;
-    }
-};
-// 2x (normal) or 8x (HQ); latency in base-rate samples 32 / 56
-struct Oversampler {
-    HbUp u[3]; HbDown d[3];
-    void reset() { for (int i = 0; i < 3; ++i) { u[i].reset(); d[i].reset(); } }
-    static int latency(int os) { return os == 2 ? 32 : 56; }
-    inline void up(float x, int os, float* y) {
-        float a, b; u[0].process(x, a, b);
-        if (os == 2) { y[0] = a; y[1] = b; return; }
-        float c[4]; u[1].process(a, c[0], c[1]); u[1].process(b, c[2], c[3]);
-        for (int i = 0; i < 4; ++i) u[2].process(c[i], y[2 * i], y[2 * i + 1]);
-    }
-    inline float down(const float* y, int os) {
-        if (os == 2) return d[0].process(y[0], y[1]);
-        float c[4]; for (int i = 0; i < 4; ++i) c[i] = d[2].process(y[2 * i], y[2 * i + 1]);
-        const float a = d[1].process(c[0], c[1]), b = d[1].process(c[2], c[3]);
-        return d[0].process(a, b);
-    }
-};
 
 // ------------------------------------------------------------------ distortion styles
 inline const char* styleName(int s) {
     static const char* const n[kNumStyles] = { "Clean Tube", "Warm Tube", "Hot Tube", "Broken Tube", "Clean Tape", "Warm Tape", "Hot Tape",
-        "Clean Amp", "Crunch Amp", "Lead Amp", "Soft Saturation", "Hard Clip", "Rectify", "Crush", "Smear", "Fold" };
+        "Clean Amp", "Crunch Amp", "Lead Amp", "Soft Saturation", "Hard Clip", "Rectify", "Crush", "Smear", "Fold",
+        // 2.0 (appended)
+        "Gentle Tube", "Sagging Tube", "Dirty Tape", "Breakup Amp", "Metal Amp", "Heavy Saturation", "Transformer",
+        "Downsample", "Destroy", "Ring Mod", "Octave Up", "Sub Octave" };
     return n[s < 0 ? 0 : (s >= kNumStyles ? kNumStyles - 1 : s)];
 }
-inline int styleCategory(int s) { return s <= 3 ? 0 : (s <= 6 ? 1 : (s <= 9 ? 2 : (s <= 11 ? 3 : 4))); }
-inline const char* categoryName(int c) { static const char* const n[5] = { "Tube", "Tape", "Amp", "Saturation", "Experimental" }; return n[c]; }
+inline int styleCategory(int s) {
+    static const int c[kNumStyles] = { 0, 0, 0, 0, 1, 1, 1, 2, 2, 2, 3, 3, 4, 4, 4, 4,  0, 0, 1, 2, 2, 3, 3, 4, 4, 4, 4, 4 };
+    return c[s < 0 ? 0 : (s >= kNumStyles ? kNumStyles - 1 : s)];
+}
+inline const char* categoryName(int c) { static const char* const n[5] = { "Tube", "Tape", "Amp", "Saturation", "FX" }; return n[c]; }
+// styles where DRIVE sets an amount (smear, rate, ring frequency, sub level) instead of the gain into the curve
+inline bool driveIsAmount(int s) { return s == 14 || s == 23 || s == 25 || s == 27; }
 
 inline float ftanh(float x) {                           // rational tanh approximation, exact at 0 and saturating at +-3
     x = x < -3.f ? -3.f : (x > 3.f ? 3.f : x); const float x2 = x * x; return x * (27.f + x2) / (27.f + 9.f * x2);
@@ -290,6 +286,16 @@ inline float staticCurve(int s, float x, float d) {
     case 12: { const float y = ftanh(x), r = clampf(d * 1.4f, 0.f, 1.f); return y * (1.f - r) + (2.f * std::fabs(y) - 0.6366f) * r; }
     case 14: return ftanh(x * 0.5f) * 2.f;
     case 15: return std::sin(1.5707963f * x);
+    // 2.0
+    case 16: return tubeStage(x * 0.8f, 0.06f) * 1.25f;
+    case 17: return tubeStage(1.6f * tubeStage(x * 1.3f, 0.25f), 0.25f) * 0.7f;
+    case 18: return ftanh(1.2f * cubicClip(x * 1.1f) * 1.5f);
+    case 19: return ftanh(2.f * ftanh(x + 0.1f) + 0.2f) - ftanh(2.f * ftanh(0.1f) + 0.2f);
+    case 20: return ftanh(4.f * ftanh(3.f * x + 0.05f)) - ftanh(4.f * ftanh(0.05f));
+    case 21: { const float a = std::fabs(x); return a < 0.7f ? x : std::copysign(0.7f + 0.3f * ftanh((a - 0.7f) / 0.3f), x); }
+    case 22: return 0.5f * (ftanh(x * 1.6f) / 1.6f + ftanh(x * 0.5f) / 0.5f);       // (the stateful version saturates the lows harder)
+    case 24: { const float y = clampf(x * 4.f, -1.f, 1.f); return y * (1.5f - 0.5f * y * y); }
+    case 26: { const float y = ftanh(x * 1.5f); return 2.f * std::fabs(y) - 0.6366f; }
     }
     return x;
 }
@@ -304,15 +310,17 @@ inline float styleMakeup(int s, float g, float d) {
 
 struct StyleState {
     float lp = 0, hp = 0, prev = 0, hold = 0; int holdCount = 0;
+    float env = 0, ph = 0, sub = 1, subLp = 0, lowLp = 0;           // 2.0 styles
     Svf cab, pre; float dcx = 0, dcy = 0;
     std::vector<float> smear; int sw = 0, g1Pos = 0, g2Pos = 0, g1Age = 0, g2Age = 0; uint32_t rng = 12345;
-    void reset() { lp = hp = prev = hold = 0; holdCount = 0; cab.reset(); pre.reset(); dcx = dcy = 0; std::fill(smear.begin(), smear.end(), 0.f); sw = 0; g1Age = 0; g2Age = 0; }
+    void reset() { lp = hp = prev = hold = 0; holdCount = 0; env = ph = subLp = lowLp = 0; sub = 1; cab.reset(); pre.reset(); dcx = dcy = 0; std::fill(smear.begin(), smear.end(), 0.f); sw = 0; g1Age = 0; g2Age = 0; }
 };
 // per-style constants, computed per block for the band's sample rate
 struct StyleCoef {
     float preLp = 1, preHp = 0, makeup = 1, dc = 0.999f;
     SvfCoef cab, pre;
     int grainLen = 1000, holdN = 1; float bits = 65536;
+    float envA = 0.01f, envR = 0.001f, lowK = 0.01f, ringInc = 0.01f, subK = 0.01f;
     int calStyle = -1; float calDrive = -1;
 };
 
@@ -392,11 +400,17 @@ public:
         fs = sr;
         const int maxSmear = (int)(0.12f * sr * 8) + 16;
         for (auto& b : chan) for (auto& c : b) c.st.smear.assign(maxSmear, 0.f);
-        dry[0].assign(64, 0.f); dry[1].assign(64, 0.f);
+        // linear-phase split: FIR length about 85 ms (a power of two), processed in blocks of kLinBlock
+        linLen = 1024; while (linLen < (int)(0.085f * sr)) linLen <<= 1;
+        for (int c = 0; c < 2; ++c) for (int b = 0; b < kMaxBands; ++b) { conv[c][b].init(kLinBlock, linLen); linOut[c][b].assign(kLinBlock, 0.f); }
+        for (int c = 0; c < 2; ++c) linIn[c].assign(kLinBlock, 0.f);
+        int dl = 64; while (dl < linLen / 2 + kLinBlock + OversamplerN::latency(kMaxOs) + 8) dl <<= 1;
+        dry[0].assign(dl, 0.f); dry[1].assign(dl, 0.f);
         configure();
     }
     void reset() { configure(); }
-    uint32_t latency() const { return (uint32_t)Oversampler::latency(os); }
+    uint32_t latency() const { return (uint32_t)(OversamplerN::latency(os) + (linear ? linLen / 2 + kLinBlock : 0)); }
+    bool linearPhase() const { return linear; }
     float sampleRate() const { return fs; }
 
     // ---------------------------------------------------------------- MIDI and transport
@@ -423,8 +437,8 @@ public:
 
     // ---------------------------------------------------------------- render
     void process(const float* inL, const float* inR, const float* scL, const float* scR, float* outL, float* outR, uint32_t n) {
-        const int wantOs = p[kQuality] > 0.5f ? 8 : 2;
-        if (wantOs != os && fadeState == 0) fadeState = 1;
+        const int wantOs = osFactor(p); const bool wantLin = p[kXPhase] > 0.5f;
+        if ((wantOs != os || wantLin != linear) && fadeState == 0) fadeState = 1;
         for (uint32_t i = 0; i < n; ++i) {
             if (--ctl <= 0) { ctl = kCtl; control(); }
             const bool ms = msMode;
@@ -437,15 +451,35 @@ public:
             inLevel += (aIn > inLevel ? 0.01f : 0.0005f) * (aIn - inLevel);
             if (aIn > 1e-4f) silent = 0; else if (silent < 1 << 30) ++silent;
 
-            // dry copy, delayed by the oversampling latency, for the global mix
-            const int lat = Oversampler::latency(os);
+            // dry copy, delayed by the latency, for the global mix
+            const int lat = (int)latency(), dm = (int)dry[0].size() - 1;
             float dryS[2];
-            for (int c = 0; c < 2; ++c) { dry[c][dryPos] = (c ? inR[i] : inL[i]); dryS[c] = dry[c][(dryPos - lat + 64) & 63]; }
-            dryPos = (dryPos + 1) & 63;
+            for (int c = 0; c < 2; ++c) { dry[c][dryPos] = (c ? inR[i] : inL[i]); dryS[c] = dry[c][(dryPos - lat + dm + 1) & dm]; }
+            dryPos = (dryPos + 1) & dm;
 
-            float up[2][8], y[2][8];
-            ovs[0].up(x[0], os, up[0]); ovs[1].up(x[1], os, up[1]);
-            for (int k = 0; k < os; ++k) { osPhase = k; processOs(up[0][k], up[1][k], y[0][k], y[1][k]); }
+            float up[2][kMaxOs], y[2][kMaxOs];
+            if (!linear) {
+                ovs[0].up(x[0], os, up[0]); ovs[1].up(x[1], os, up[1]);
+                for (int k = 0; k < os; ++k) { osPhase = k; processOs(up[0][k], up[1][k], y[0][k], y[1][k]); }
+            } else {
+                // linear phase: split at the base rate with FIRs, then oversample each band
+                float bup[2][kMaxBands][kMaxOs];
+                for (int c = 0; c < 2; ++c) {
+                    linIn[c][linPos] = x[c];
+                    for (int b = 0; b < nb; ++b) bandUp[c][b].up(linOut[c][b][linPos], os, bup[c][b]);
+                }
+                if (++linPos == kLinBlock) {
+                    linPos = 0;
+                    if (linDirty && ++linAge >= 4) { designLinear(); linAge = 0; }
+                    for (int c = 0; c < 2; ++c) for (int b = 0; b < kMaxBands; ++b) { if (b < nb) conv[c][b].process(linIn[c].data(), linOut[c][b].data()); else std::fill(linOut[c][b].begin(), linOut[c][b].end(), 0.f); }
+                }
+                float band[2][kMaxBands];
+                for (int k = 0; k < os; ++k) {
+                    osPhase = k;
+                    for (int c = 0; c < 2; ++c) for (int b = 0; b < nb; ++b) band[c][b] = bup[c][b][k];
+                    processBands(band, y[0][k], y[1][k]);
+                }
+            }
             float o[2] = { ovs[0].down(y[0], os), ovs[1].down(y[1], os) };
             if (ms) { const float l = o[0] + o[1], r = o[0] - o[1]; o[0] = l; o[1] = r; }
             sMix += (tMix - sMix) * smooth; sOut += (tOut - sOut) * smooth;
@@ -484,10 +518,13 @@ private:
     struct BandSmooth { float drive = 0, mix = 1, fb = 0, level = 1, panL = 1, panR = 1, dyn = 0, gate = 1; };
 
     void configure() {
-        os = p[kQuality] > 0.5f ? 8 : 2;
+        os = osFactor(p); linear = p[kXPhase] > 0.5f;
         fsOs = fs * os;
         smooth = 1.f - std::exp(-1.f / (0.01f * fs)); osSmooth = 1.f - std::exp(-1.f / (0.004f * fsOs));
         for (auto& o : ovs) o.reset();
+        for (auto& c : bandUp) for (auto& o : c) o.reset();
+        for (int c = 0; c < 2; ++c) { std::fill(linIn[c].begin(), linIn[c].end(), 0.f); for (int b = 0; b < kMaxBands; ++b) { conv[c][b].reset(); std::fill(linOut[c][b].begin(), linOut[c][b].end(), 0.f); } }
+        linPos = 0; linAge = 0; linNb = -1;
         for (auto& c : split) for (auto& s : c) s.reset();
         for (auto& b : chan) for (auto& c : b) { c.st.reset(); for (auto& t : c.tone) t.reset(); c.fb.reset(); for (auto& a : c.ap) a.reset(); c.last = c.dcx = c.dcy = 0; }
         for (auto& d : dry) std::fill(d.begin(), d.end(), 0.f);
@@ -495,6 +532,14 @@ private:
         for (int b = 0; b < kMaxBands; ++b) dynEnv[b] = 0;
         for (int e = 0; e < kNumEf; ++e) efEnv[e] = 0;
         control(); snapSmooth();
+        if (linear) designLinear();
+    }
+    // (re)design the linear-phase band filters for the current crossovers
+    void designLinear() {
+        std::vector<std::vector<float>> h; designLinearBands(linXf, nb, linSlope, fs, linLen, h);
+        for (int c = 0; c < 2; ++c) for (int b = 0; b < nb; ++b) conv[c][b].setKernel(h[b].data(), linLen);
+        for (int i = 0; i < 5; ++i) linDesXf[i] = linXf[i];
+        linNb = nb; linDesSlope = linSlope; linDirty = false;
     }
     void snapSmooth() {
         for (int b = 0; b < kMaxBands; ++b) { BandSmooth& s = cur[b]; const BandSmooth& t = tgt[b]; s = t; }
@@ -560,7 +605,7 @@ private:
         for (int k = 0; k < na; ++k) { const int s = act[k], dst = (int)std::round(p[sp(s, kSlotDst)]);
             if (dst < kDstSlotFirst) modOff[dst] += amt[s] * srcVal[(int)std::round(p[sp(s, kSlotSrc)])]; }
         // effective values
-        for (uint32_t i = 0; i < kOutLearn; ++i) effv[i] = p[i];
+        for (uint32_t i = 0; i < kParamCount; ++i) effv[i] = p[i];
         for (int d = 1; d < kDstSlotFirst; ++d) {
             if (modOff[d] == 0.f) continue;
             const int q = destParam(d); if (q < 0) continue;
@@ -573,11 +618,19 @@ private:
     void updateCoefficients() {
         nb = (int)clampf(std::round(p[kNumBands]), 1, kMaxBands);
         msMode = p[kChannelMode] > 0.5f;
-        const int slope = (int)clampf(std::round(p[kXSlope]), 0, 2);
+        const int slope = (int)clampf(std::round(p[kXSlope]), 0, 3);
         // crossovers, kept in order and at least a third of an octave apart
         float xf[5]; float lo = 20.f;
         for (int i = 0; i < nb - 1; ++i) { xf[i] = clampf(effv[kX1 + i], lo * 1.26f, 20000.f / std::pow(1.26f, (float)(nb - 2 - i))); lo = xf[i]; }
         for (int i = 0; i < nb - 1; ++i) xc[i].design(xf[i], fsOs, slope);
+        if (linear) {           // linear phase: redesign when the crossovers have moved by more than 1%, or the bands or slope changed
+            for (int i = 0; i < nb - 1; ++i) linXf[i] = xf[i];
+            linSlope = slope;
+            bool moved = nb != linNb || slope != linDesSlope;
+            for (int i = 0; i < nb - 1 && !moved; ++i) moved = std::fabs(std::log(linXf[i] / std::max(linDesXf[i], 1.f))) > 0.01f;
+            if (moved) linDirty = true;
+            if (nb != linNb) linAge = 99;                 // a new band count can't wait
+        }
         bool anySolo = false; for (int b = 0; b < nb; ++b) anySolo |= p[bp(b, kBSolo)] > 0.5f;
         for (int b = 0; b < nb; ++b) {
             BandSmooth& t = tgt[b];
@@ -627,6 +680,17 @@ private:
             break;
         case 13: c.bits = std::pow(2.f, 15.f - 13.f * d); c.holdN = std::max(1, (int)std::round((1.f + d * d * 30.f) * os)); break;
         case 14: c.grainLen = std::max(64, (int)(fsOs * (0.015f + 0.05f * d))); break;
+        // 2.0
+        case 17: c.preHp = onePole(30.f); c.envA = 1.f - std::exp(-1.f / (0.06f * fsOs)); c.envR = 1.f - std::exp(-1.f / (0.4f * fsOs)); break;
+        case 18: c.preLp = onePole(6500.f); break;
+        case 19:
+            c.preHp = onePole(100.f); c.cab.design(SvfCoef::Low, 4500.f, 0.9f, 0, fsOs); c.pre.design(SvfCoef::Bell, 900.f, 0.7f, 4.f, fsOs);
+            c.envA = 1.f - std::exp(-1.f / (0.01f * fsOs)); c.envR = 1.f - std::exp(-1.f / (0.15f * fsOs)); break;
+        case 20: c.preHp = onePole(250.f); c.cab.design(SvfCoef::Low, 3800.f, 1.2f, 0, fsOs); c.pre.design(SvfCoef::Bell, 1200.f, 0.8f, 8.f, fsOs); break;
+        case 22: c.lowK = onePole(180.f); break;
+        case 23: c.holdN = std::max(1, (int)std::round((1.f + d * d * 40.f) * os)); break;
+        case 25: c.ringInc = 30.f * std::exp2(7.f * clampf(d, 0.f, 1.f)) / fsOs; break;
+        case 27: c.subK = onePole(600.f); c.envA = 1.f - std::exp(-1.f / (0.005f * fsOs)); c.envR = 1.f - std::exp(-1.f / (0.08f * fsOs)); break;
         }
         c.dc = std::exp(-2.f * kPi * 12.f / fsOs);
     }
@@ -641,6 +705,9 @@ private:
             band[c][nb - 1] = rest;
             for (int b = 0; b < nb - 1; ++b) for (int j = b + 1; j < nb - 1; ++j) band[c][b] = chan[b][c].ap[j].process(band[c][b], xc[j]);
         }
+        processBands(band, yl, yr);
+    }
+    inline void processBands(float (&band)[2][kMaxBands], float& yl, float& yr) {
         float out[2] = { 0, 0 };
         for (int b = 0; b < nb; ++b) {
             BandSmooth& s = cur[b]; const BandSmooth& t = tgt[b];
@@ -658,7 +725,7 @@ private:
                 float v = dryB * dynGain[b];
                 // feedback through a resonant band-pass, softly limited so it cannot run away
                 if (s.fb > 0.0005f) v += 3.f * ftanh(runSvf(ch.fb, fbc[b], ch.last) * s.fb * 1.6f / 3.f);
-                float w = style[b] == 14 ? shape(b, c, v) : shape(b, c, v * s.drive) * sc[b].makeup;   // Smear: drive sets the amount of smearing, not gain
+                float w = driveIsAmount(style[b]) ? shape(b, c, v) : shape(b, c, v * s.drive) * sc[b].makeup;   // Smear etc.: drive sets an amount, not gain
                 // DC blocker (asymmetric styles create DC)
                 const float dcOut = w - ch.dcx + sc[b].dc * ch.dcy; ch.dcx = w; ch.dcy = dcOut; w = dcOut;
                 for (int k = 0; k < 4; ++k) if (toneOn[b][k]) w = runSvf(ch.tone[k], tc[b][k], w); else ch.tone[k].reset();
@@ -698,13 +765,41 @@ private:
             const float pos = d * 4.f; const int i0 = std::min(3, (int)pos); const float comp = dbToGain(loss[i0] + (loss[i0 + 1] - loss[i0]) * (pos - i0));
             return (2.f * ftanh(x * 0.5f) * (1.f - 0.7f * d) + gsum * (0.4f + 0.6f * d)) * comp;
         }
+        // 2.0
+        case 17: {                                                     // the bias shifts with the level: the tube "sags" on loud passages
+            const float a = std::fabs(x); st.env += (a > st.env ? k.envA : k.envR) * (a - st.env);
+            const float e = std::min(st.env, 1.f);
+            return tubeStage(1.6f * tubeStage(x * 1.3f / (1.f + 0.8f * e), 0.25f + 0.3f * e), 0.25f) * 0.7f / (1.f + 0.35f * e); }
+        case 18: { const float y = staticCurve(18, x + 0.2f * (x - st.prev), 0); st.prev = x; return y; }
+        case 19: {                                                     // power-supply sag: the gain drops while it works hard
+            const float a = std::fabs(x); st.env += (a > st.env ? k.envA : k.envR) * (a - st.env);
+            return runSvf(st.cab, k.cab, staticCurve(19, runSvf(st.pre, k.pre, x) / (1.f + 1.5f * st.env), 0)); }
+        case 20: return runSvf(st.cab, k.cab, staticCurve(20, runSvf(st.pre, k.pre, x), 0));
+        case 22: {                                                     // the lows saturate first, as in an iron core
+            st.lowLp += (x - st.lowLp) * k.lowK; const float lo = st.lowLp, hi = x - lo;
+            return ftanh(lo * 1.6f) / 1.6f + ftanh(hi * 0.5f) / 0.5f; }
+        case 23: if (--st.holdCount <= 0) { st.holdCount = k.holdN; st.hold = x; } return st.hold;
+        case 25: { st.ph += k.ringInc; if (st.ph >= 1.f) st.ph -= 1.f; return x * std::sin(2.f * kPi * st.ph) * 1.41421356f; }
+        case 27: {                                                     // a flip-flop divider: a square an octave down, following the input's level
+            st.subLp += (x - st.subLp) * k.subK;
+            if (st.prev <= 0.f && st.subLp > 0.f) st.sub = -st.sub;
+            st.prev = st.subLp;
+            const float a = std::fabs(x); st.env += (a > st.env ? k.envA : k.envR) * (a - st.env);
+            const float d = clampf(effv[bp(b, kBDrive)], 0.f, 1.f);
+            return (ftanh(x) + 1.2f * d * st.sub * st.env) / (1.f + 0.5f * d); }
         default: return staticCurve(style[b], x, effv[bp(b, kBDrive)]);
         }
     }
 
     float fs = 48000.f, fsOs = 96000.f, smooth = 0.01f, osSmooth = 0.01f;
     int os = 2, nb = 1, ctl = 0, fadeState = 0; float fadeGain = 1; bool msMode = false;
-    Oversampler ovs[2];
+    OversamplerN ovs[2];
+    // linear-phase split
+    static constexpr int kLinBlock = 256;
+    bool linear = false, linDirty = false; int linLen = 4096, linPos = 0, linAge = 0, linNb = -1, linSlope = 1, linDesSlope = -1;
+    float linXf[5] = { 120, 600, 2500, 6000, 12000 }, linDesXf[5] = {};
+    epsilon::Convolver conv[2][kMaxBands]; std::vector<float> linIn[2], linOut[2][kMaxBands];
+    OversamplerN bandUp[2][kMaxBands];
     Split split[2][kMaxBands - 1];
     XoverCoef xc[kMaxBands - 1];
     BandChan chan[kMaxBands][2];

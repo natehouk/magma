@@ -75,6 +75,25 @@ inline void xyMorph(E& e) { bands(e, 2, 800); band(e, 0, 6, 0.4f); band(e, 1, 15
     e.setSlot(1, kSrcXy1Y, dstBand(1, kBDrive), 0.5f); e.setSlot(2, kSrcXy1X, kDstXFirst, 0.4f); e.p[xyp(0, 0)] = 0.3f; e.p[xyp(0, 1)] = 0.3f; }
 inline void midiDrive(E& e) { band(e, 0, 8, 0.2f); e.setSlot(0, kSrcVelocity, dstBand(0, kBDrive), 0.5f); e.setSlot(1, kSrcWheel, dstBand(0, kBPresence), -0.5f); }
 inline void crossoverDance(E& e) { bands(e, 2, 600); band(e, 0, 0, 0.1f); band(e, 1, 11, 0.6f, 1, -4); lfo(e, 0, 1, 1, 1, 5); e.setSlot(0, kSrcXlfo1, kDstXFirst, 0.3f); }
+// ---- 2.0
+inline void linear(E& e, int slope = kSlope48) { e.p[kXPhase] = 1; e.p[kXSlope] = (float)slope; }
+inline void gentleGlow(E& e) { band(e, 0, 16, 0.45f); tone(e, 0, 0.5f, 0, 1, 1); }
+inline void ironTransformer(E& e) { band(e, 0, 22, 0.4f); tone(e, 0, 1, 0, -0.5f, 0); }
+inline void linearMasterWarmth(E& e) { bands(e, 4, 120, 800, 6000); linear(e); band(e, 0, 22, 0.25f); band(e, 1, 4, 0.2f); band(e, 2, 16, 0.25f); band(e, 3, 0, 0.2f, 0.5f); }
+inline void dirtyTapeDrums(E& e) { band(e, 0, 18, 0.55f); e.p[bp(0, kBDynamics)] = 0.4f; tone(e, 0, 1.5f, 0, -1, -2); }
+inline void destroyedKick(E& e) { bands(e, 2, 200); band(e, 0, 24, 0.5f, 0.3f); band(e, 1, 0, 0.1f, 0.5f); }
+inline void subOctaveBass(E& e) { bands(e, 2, 250); band(e, 0, 27, 0.6f); band(e, 1, 0, 0.1f, 0.5f); }
+inline void linearBassSplit(E& e) { bands(e, 2, 120); linear(e); band(e, 0, 16, 0.15f); band(e, 1, 20, 0.45f, 0.8f, -4); }
+inline void saggingVocal(E& e) { band(e, 0, 17, 0.35f, 0.6f); tone(e, 0, -1, 0, 1, 1); }
+inline void breakupKeys(E& e) { band(e, 0, 19, 0.45f); tone(e, 0, 0, 1.5f, 0, -1); }
+inline void metalRhythm(E& e) { band(e, 0, 20, 0.6f, 1, -3); tone(e, 0, 1, -3, 1, -1); }
+inline void breakupAmp(E& e) { band(e, 0, 19, 0.55f); tone(e, 0, 0, 2, 1, -1); }
+inline void superbSheen(E& e) { bands(e, 3, 250, 5000); linear(e, kSlope24); e.p[kQuality] = 1; e.p[kSuperb] = 1; band(e, 0, 16, 0.15f); band(e, 1, 4, 0.15f); band(e, 2, 0, 0.3f, 0.5f); tone(e, 2, 0, 0, 0, 1.5f); }
+inline void heavySatBus(E& e) { band(e, 0, 21, 0.4f, 0.7f); tone(e, 0, 0.5f, 0, 0.5f, 0); }
+inline void ringSweep(E& e) { band(e, 0, 25, 0.4f, 0.6f); lfo(e, 0, 1, 0.2f); e.setSlot(0, kSrcXlfo1, dstBand(0, kBDrive), 0.3f); }
+inline void octaveFuzz(E& e) { band(e, 0, 26, 0.5f, 0.8f); tone(e, 0, -2, 1, 0, -3); }
+inline void downsampled(E& e) { band(e, 0, 23, 0.4f, 0.8f); e.p[ep(0, kETrigger)] = 1; e.setSlot(0, kSrcEg1, dstBand(0, kBDrive), -0.3f); }
+inline void gentleSplit(E& e) { bands(e, 3, 200, 2500); e.p[kXSlope] = kSlope6; band(e, 0, 22, 0.3f); band(e, 1, 1, 0.35f); band(e, 2, 18, 0.3f, 0.7f); }
 } // namespace pre
 
 struct PresetDef { const char* name; const char* category; void (*fn)(Engine&); };
@@ -96,6 +115,15 @@ static const PresetDef kPresetDefs[] = {
     { "Bit Decay", "Creative", pre::bitDecay }, { "Rectifier", "Creative", pre::rectifier }, { "Fold Sweep", "Creative", pre::foldSweep },
     { "Envelope Fuzz", "Creative", pre::envelopeFuzz }, { "XY Morph", "Creative", pre::xyMorph }, { "MIDI Drive", "Creative", pre::midiDrive },
     { "Crossover Dance", "Creative", pre::crossoverDance },
+    // 2.0 (appended, so 1.x program numbers stay the same)
+    { "Gentle Tube Glow", "Warmth", pre::gentleGlow }, { "Iron Transformer", "Warmth", pre::ironTransformer }, { "Linear Master Warmth", "Warmth", pre::linearMasterWarmth },
+    { "Dirty Tape Drums", "Drums", pre::dirtyTapeDrums }, { "Destroyed Kick", "Drums", pre::destroyedKick },
+    { "Sub Octave Bass", "Bass", pre::subOctaveBass }, { "Linear Bass Split", "Bass", pre::linearBassSplit },
+    { "Sagging Tube Vocal", "Vocals & Keys", pre::saggingVocal }, { "Breakup Keys", "Vocals & Keys", pre::breakupKeys },
+    { "Metal Rhythm", "Guitar", pre::metalRhythm }, { "Breakup Amp", "Guitar", pre::breakupAmp },
+    { "Superb Sheen", "Mix & Master", pre::superbSheen }, { "Heavy Saturation Bus", "Mix & Master", pre::heavySatBus },
+    { "Ring Mod Sweep", "Creative", pre::ringSweep }, { "Octave Fuzz", "Creative", pre::octaveFuzz }, { "Downsampled", "Creative", pre::downsampled },
+    { "Gentle 6 dB Split", "Creative", pre::gentleSplit },
 };
 static constexpr uint32_t kNumPresets = sizeof(kPresetDefs) / sizeof(kPresetDefs[0]);
 

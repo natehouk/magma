@@ -30,7 +30,7 @@ protected:
     const char* getMaker() const override { return "Epsilon Audio"; }
     const char* getHomePage() const override { return "https://epsilonrecords.com"; }
     const char* getLicense() const override { return "MIT"; }
-    uint32_t getVersion() const override { return d_version(1, 0, 0); }
+    uint32_t getVersion() const override { return d_version(2, 0, 0); }
 
     void initAudioPort(bool input, uint32_t index, AudioPort& port) override {
         if (input && index >= 2) {                 // inputs 3-4: sidechain for the envelope followers
@@ -82,10 +82,10 @@ protected:
     }
 
     void initProgramName(uint32_t i, String& name) override { name = presets()[i].name; }
-    void loadProgram(uint32_t i) override { for (uint32_t k = 0; k < kOutLearn; ++k) engine.p[k] = presets()[i].v[k]; }
+    void loadProgram(uint32_t i) override { for (uint32_t k = 0; k < kParamCount; ++k) if (isSetting(k)) engine.p[k] = presets()[i].v[k]; }
 
     float getParameterValue(uint32_t i) const override { return i == kOutLearn ? learnEcho : engine.p[i]; }
-    void setParameterValue(uint32_t i, float v) override { if (i < kOutLearn) engine.p[i] = v; }
+    void setParameterValue(uint32_t i, float v) override { if (isSetting(i)) engine.p[i] = v; }
 
     void activate() override { engine.setSampleRate((float)getSampleRate()); reportedLatency = engine.latency(); setLatency(reportedLatency); }
     void sampleRateChanged(double sr) override { engine.setSampleRate((float)sr); }
@@ -119,7 +119,7 @@ protected:
             case 0xB0: {
                 const int cc = d[1] & 0x7F, val = d[2] & 0x7F;
                 if (cc == 123) { engine.allNotesOff(); break; }
-                if (learnTarget >= 0 && learnTarget < (int)kOutLearn) {
+                if (learnTarget >= 0 && isSetting((uint32_t)learnTarget)) {
                     for (int& m : ccMap) if (m == learnTarget) m = -1;
                     ccMap[cc] = learnTarget;
                     learnSerial = (learnSerial + 1) % 8;
@@ -149,7 +149,7 @@ private:
         const char* q = v;
         while (*q) {
             int cc = -1, prm = -1;
-            if (std::sscanf(q, "%d:%d", &cc, &prm) == 2 && cc >= 0 && cc < 128 && prm >= 0 && prm < (int)kOutLearn) ccMap[cc] = prm;
+            if (std::sscanf(q, "%d:%d", &cc, &prm) == 2 && cc >= 0 && cc < 128 && prm >= 0 && isSetting((uint32_t)prm)) ccMap[cc] = prm;
             const char* semi = std::strchr(q, ';');
             if (!semi) break;
             q = semi + 1;

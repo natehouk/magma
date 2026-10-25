@@ -24,6 +24,18 @@ inline const char* styleTip(int s) {
     case 13: return "Crush: bit-depth and sample-rate reduction; Drive takes it from subtle grit to 2-bit chaos.";
     case 14: return "Smear: replays tiny grains from the recent past and feeds them back. Drive sets how much smears.";
     case 15: return "Fold: a wavefolder. Past full scale the wave folds back on itself: bright, metallic, synthetic.";
+    case 16: return "Gentle Tube: the lightest tube colour. A trace of even harmonics that stays clean even at high drive.";
+    case 17: return "Sagging Tube: a tube stage whose supply droops under load. Loud passages compress and soften, then recover: a breathing, bluesy feel.";
+    case 18: return "Dirty Tape: worn, over-driven tape with uneven, smeared saturation and a duller top.";
+    case 19: return "Breakup Amp: an amp just past clean, where the edges crunch when you dig in and clean up when you play softly.";
+    case 20: return "Metal Amp: very high gain with a tight low end and pushed upper mids, for modern heavy tones.";
+    case 21: return "Heavy Saturation: a dense, hard-kneed curve between Soft Saturation and Hard Clip. Thick and loud.";
+    case 22: return "Transformer: low frequencies saturate much earlier than highs, like an iron-core transformer: weight and grip in the bass.";
+    case 23: return "Downsample: sample-rate reduction without bit loss. Drive sets how far the rate drops: aliasing, metallic artefacts.";
+    case 24: return "Destroy: extreme gain into a hard, crushing curve. For when nothing else is broken enough.";
+    case 25: return "Ring Mod: multiplies the band with a sine oscillator. Drive sets the oscillator frequency: bell-like, inharmonic tones.";
+    case 26: return "Octave Up: full-wave rectification adds a strong upper octave, like an octave fuzz.";
+    case 27: return "Sub Octave: adds a square-ish tone one octave below the input that follows its pitch. Drive sets how much.";
     default: return "";
     }
 }
@@ -31,8 +43,8 @@ inline const char* styleTip(int s) {
 inline const char* paramTip(uint32_t p) {
     if (p >= kBandFirst && p < kXlfoFirst) {
         switch ((p - kBandFirst) % kBandFields) {
-        case kBStyle: return "The distortion style for this band. Click to choose from 16 styles in five families: Tube, Tape, Amp, Saturation and Experimental.";
-        case kBDrive: return "How hard this band is driven into the distortion. The level is compensated, so Drive changes the character, not the volume.";
+        case kBStyle: return "The distortion style for this band. Click to choose from 28 styles in five families: Tube, Tape, Amp, Saturation and FX.";
+        case kBDrive: return "How hard this band is driven into the distortion. The level is compensated, so Drive changes the character, not the volume. For Smear, Downsample, Ring Mod and Sub Octave it sets the amount of the effect instead.";
         case kBDynamics: return "Right: compresses the band before the distortion (denser, more sustain). Left: expands it (more punch, quieter tails). Centre: off.";
         case kBFbAmt: return "Feeds the band's output back into its input through a resonant filter. Small amounts add a ringing tone; large amounts howl. Auto Mute stops it when the input goes silent.";
         case kBFbFreq: return "The frequency the feedback resonates at.";
@@ -48,9 +60,11 @@ inline const char* paramTip(uint32_t p) {
         }
     }
     switch (p) {
-    case kXSlope: return "Steepness of the crossovers between bands: 12, 24 or 48 dB per octave. Steeper keeps each band's distortion to its own range. The bands always add up flat.";
+    case kXSlope: return "Steepness of the crossovers between bands: 6, 12, 24 or 48 dB per octave. 6 dB is the gentlest overlap; steeper keeps each band's distortion to its own range. The bands always add up flat.";
+    case kXPhase: return "NATURAL: minimum-phase crossovers with no added latency. LINEAR: linear-phase crossovers that leave the phase of the dry sound untouched, at the cost of about 50 ms of latency and more CPU.";
+    case kSuperb: return "Runs the distortion at 32x oversampling. Set it with the QUALITY buttons (SUPERB).";
     case kChannelMode: return "STEREO processes left and right. MID/SIDE processes the centre and the stereo difference instead; pan then moves a band between mid and side.";
-    case kQuality: return "NORMAL runs at 2x oversampling. HQ runs at 8x: cleaner high frequencies with heavy drive, at about four times the CPU.";
+    case kQuality: return "Oversampling for the distortion. NORMAL: 2x. GOOD: 8x, cleaner highs with heavy drive at about four times the CPU. SUPERB: 32x, the least aliasing, meant for mixdowns and rendering since it needs much more CPU.";
     case kAutoMute: return "Stops feedback from ringing on once the input has been silent for a quarter of a second.";
     case kMix: return "Global dry/wet. The dry signal is delayed to stay in time with the processed one.";
     case kOutGain: return "Final output level.";
@@ -99,10 +113,10 @@ inline const char* paramTip(uint32_t p) {
 }
 
 enum TipTarget { kTipUndo, kTipRedo, kTipLearn, kTipMidi, kTipHelp, kTipA, kTipB, kTipCopy, kTipPrev, kTipPresets, kTipNext,
-                 kTipDisplay, kTipDivider, kTipChip, kTipStepEdit, kTipXyPad, kTipRemoveBand, kTipSourceTab, kNumTipTargets };
+                 kTipDisplay, kTipDivider, kTipChip, kTipStepEdit, kTipXyPad, kTipRemoveBand, kTipSourceTab, kTipCompPresets, kTipModRing, kNumTipTargets };
 inline const char* targetTitle(int t) {
     static const char* const n[kNumTipTargets] = { "Undo", "Redo", "MIDI Learn", "MIDI", "Help", "Setting A", "Setting B", "Copy A/B",
-        "Previous preset", "Presets", "Next preset", "Band display", "Crossover", "Modulation source", "Steps", "XY pad", "Remove band", "Sources" };
+        "Previous preset", "Presets", "Next preset", "Band display", "Crossover", "Modulation source", "Steps", "XY pad", "Remove band", "Sources", "Source presets", "Modulation" };
     return n[t];
 }
 inline const char* targetTip(int t) {
@@ -124,6 +138,8 @@ inline const char* targetTip(int t) {
     case kTipXyPad: return "Drag the dot. X and Y are separate modulation sources; drag their chips onto knobs.";
     case kTipRemoveBand: return "Removes this band and merges it into its neighbour.";
     case kTipSourceTab: return "Choose a modulation source to edit. Each source has a chip you drag onto the knobs it should move.";
+    case kTipCompPresets: return "Presets for just this source: load a ready-made LFO shape, sequence, envelope or follower setting without touching the rest of the patch, or save your own. Right-click a saved one to delete it.";
+    case kTipModRing: return "This knob is modulated. Click the ring (or right-click the knob) to list every slot that moves it, with its amount, bypass and delete.";
     default: return "";
     }
 }
@@ -138,25 +154,30 @@ static const HelpPage kHelpPages[] = {
     { "Bands",
       "Double-click the display to split the band under the pointer in two (up to six). Drag a crossover line to move it; right-click it to merge the two bands. "
       "Click a band to edit it in the panel below; drag a band up or down to change its drive.\n\n"
-      "Crossovers are 12, 24 or 48 dB/oct and always add up to a flat response, so a band with no drive is completely transparent.\n\n"
+      "Crossovers are 6, 12, 24 or 48 dB/oct and always add up to a flat response, so a band with no drive is completely transparent. "
+      "CROSSOVER PHASE: NATURAL adds no latency; LINEAR keeps the phase of the whole signal intact (about 50 ms of latency).\n\n"
       "MUTE silences a band, SOLO plays only the soloed bands." },
     { "Styles",
-      "TUBE: Clean, Warm, Hot and Broken, mostly even harmonics.\nTAPE: Clean, Warm and Hot, soft symmetric saturation with a gentle top-end roll-off.\n"
-      "AMP: Clean, Crunch and Lead guitar amps, with speaker-cabinet filtering.\nSATURATION: Soft and Hard Clip.\n"
-      "EXPERIMENTAL: Rectify, Crush (bits and sample rate), Smear (grain feedback) and Fold (wavefolder).\n\n"
+      "TUBE: Gentle, Clean, Warm, Hot, Sagging and Broken, mostly even harmonics.\nTAPE: Clean, Warm, Hot and Dirty, soft saturation with a gentle top-end roll-off.\n"
+      "AMP: Clean, Breakup, Crunch, Lead and Metal guitar amps, with speaker-cabinet filtering.\nSATURATION: Soft, Heavy, Hard Clip and Transformer.\n"
+      "FX: Rectify, Crush, Downsample, Destroy, Smear, Fold, Ring Mod, Octave Up and Sub Octave. For Smear, Downsample, Ring Mod and Sub Octave, "
+      "DRIVE sets the amount of the effect.\n\n"
       "The level is compensated as you turn up Drive, so you hear the character change, not just a louder signal." },
     { "Band controls",
       "DRIVE: how hard the band hits the distortion.\nDYNAMICS: right compresses before the distortion, left expands.\n"
       "FEEDBACK and FREQ: feed the band back into itself through a resonant filter for ringing and howling.\n"
       "BASS, MID, TREBLE, PRESENCE: tone shaping after the distortion. Negative Presence acts like a speaker cabinet.\n"
       "MIX: parallel blend for this band. LEVEL and PAN: the band's level and position.\n\n"
-      "Globally: STEREO or MID/SIDE, NORMAL (2x) or HQ (8x oversampling), crossover slope, AUTO MUTE for feedback, MIX and OUTPUT." },
+      "Globally: STEREO or MID/SIDE, QUALITY (NORMAL 2x, GOOD 8x, SUPERB 32x oversampling), crossover slope and phase, AUTO MUTE for feedback, MIX and OUTPUT. "
+      "SUPERB with many bands takes a lot of CPU; use it for the final render." },
     { "Modulation",
       "Pick a source in the tabs at the bottom left: four XLFOs (wave or 16-step), two envelope generators (triggered by MIDI notes or by the input level), "
       "two envelope followers (input or sidechain), two XY pads and the MIDI sources.\n\n"
       "Drag the source's chip onto any knob. That creates a modulation slot (up to 50) shown in the list at the bottom right, where you can change its amount, "
       "destination or source, bypass it or delete it. A slot's amount can itself be modulated by another slot.\n\n"
-      "Modulated knobs get a coloured ring, and a small dot shows where the modulation has taken them right now." },
+      "Modulated knobs get a coloured ring, and a small dot shows where the modulation has taken them right now. Click the ring, or right-click the knob, "
+      "to see every slot that moves it and edit them right there.\n\n"
+      "LFO, EG and EF PRESETS (top right of the source editor) load or save a setting for that one source only." },
     { "A/B, undo & MIDI",
       "A/B holds two complete settings; COPY copies the current one to the other slot. Every edit is an undo step (Cmd/Ctrl-Z, Cmd/Ctrl-Shift-Z).\n\n"
       "MIDI LEARN: click LEARN, click a control, move a controller. MIDI notes also drive the Velocity and Key sources and can trigger the envelopes.\n\n"

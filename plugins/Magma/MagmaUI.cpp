@@ -2,6 +2,7 @@
 #include "DistrhoUI.hpp"
 #include "MagmaPlugin.hpp"
 #include "UserPresets.hpp"
+#include "ComponentPresets.hpp"
 #include "ResizeHandle.hpp"
 #include "Help.hpp"
 #include "Fft.hpp"
@@ -72,6 +73,7 @@ static constexpr float TAB_Y = MY + 18, TAB_W = 50, TAB_H = 20;
 static constexpr int kNumTabs = 11;                                    // XLFO 1-4, EG 1-2, EF 1-2, XY 1-2, MIDI
 static constexpr float SLOT_ROWH = 22, SLOT_COLW = 282, SLOT_Y0 = SY + 34; static constexpr int SLOT_ROWS = 8;
 static constexpr float STEP_X = MX + 16, STEP_Y = MY + 104, STEP_W = 380, STEP_H = 112;
+static constexpr float COMP_W = 110, COMP_H = 20, COMP_X = MX + MW - 14 - COMP_W, COMP_Y = MY + 78;
 static constexpr float XY_X = MX + 20, XY_Y = MY + 44, XY_W = 300, XY_H = 180;
 
 enum WType { Knob, Toggle, Segment, Stepper };
@@ -96,11 +98,12 @@ static std::vector<Ctl> buildControls() {
     c.push_back({ Toggle, GBand, kBSolo, BX + 640, BY + 24, 0, "SOLO" });
     // global panel
     c.push_back({ Segment, GGlobal, kChannelMode, GX + 100, GY + 46, 168, "" });
-    c.push_back({ Segment, GGlobal, kQuality, GX + 286, GY + 46, 150, "" });
+    c.push_back({ Segment, GGlobal, kQuality, GX + 286, GY + 46, 168, "" });
     c.push_back({ Segment, GGlobal, kXSlope, GX + 100, GY + 106, 168, "" });
-    c.push_back({ Toggle, GGlobal, kAutoMute, GX + 236, GY + 106, 0, "AUTO MUTE" });
-    c.push_back({ Knob, GGlobal, kMix, GX + 110, GY + 178, 28, "MIX" });
-    c.push_back({ Knob, GGlobal, kOutGain, GX + 270, GY + 178, 28, "OUTPUT" });
+    c.push_back({ Segment, GGlobal, kXPhase, GX + 286, GY + 106, 168, "" });
+    c.push_back({ Knob, GGlobal, kMix, GX + 74, GY + 180, 26, "MIX" });
+    c.push_back({ Knob, GGlobal, kOutGain, GX + 186, GY + 180, 26, "OUTPUT" });
+    c.push_back({ Toggle, GGlobal, kAutoMute, GX + 274, GY + 180, 0, "AUTO MUTE" });
     // XLFO editor
     c.push_back({ Segment, GXlfo, kLMode, MX + 82, MY + 62, 130, "" });
     c.push_back({ Segment, GXlfo, kLSync, MX + 296, MY + 62, 250, "" });
@@ -128,21 +131,29 @@ static const std::vector<Ctl>& controls() { static std::vector<Ctl> c = buildCon
 
 static const char* const* segLabels(int group, int field, int& n) {
     static const char* const chm[] = { "STEREO", "MID/SIDE" };
-    static const char* const q[] = { "NORMAL", "HQ" };
-    static const char* const sl[] = { "12 DB", "24 DB", "48 DB" };
+    static const char* const q[] = { "NORMAL", "GOOD", "SUPERB" };
+    static const char* const sl[] = { "6 DB", "12 DB", "24 DB", "48 DB" };
+    static const char* const ph[] = { "NATURAL", "LINEAR" };
     static const char* const lm[] = { "WAVE", "STEPS" };
     static const char* const sy[] = { "FREE", "SYNC", "DOTTED", "TRIPLET" };
     static const char* const wv[] = { "SIN", "TRI", "SAW+", "SAW-", "SQR", "RND", "S&H" };
     static const char* const tr[] = { "MIDI", "AUDIO" };
     static const char* const efs[] = { "INPUT", "SIDECHAIN" };
     n = 0;
-    if (group == GGlobal) { if (field == kChannelMode) { n = 2; return chm; } if (field == kQuality) { n = 2; return q; } if (field == kXSlope) { n = 3; return sl; } }
+    if (group == GGlobal) { if (field == kChannelMode) { n = 2; return chm; } if (field == kQuality) { n = 3; return q; } if (field == kXSlope) { n = 4; return sl; } if (field == kXPhase) { n = 2; return ph; } }
     if (group == GXlfo) { if (field == kLMode) { n = 2; return lm; } if (field == kLSync) { n = 4; return sy; } if (field == kLWave) { n = 7; return wv; } }
     if (group == GEg && field == kETrigger) { n = 2; return tr; }
     if (group == GEf && field == kFSource) { n = 2; return efs; }
     return nullptr;
 }
 
+// Segments whose order on screen differs from the parameter value. QUALITY spans two parameters
+// (Quality and the 2.0 Superb switch); the slope segment shows 6 dB/oct first although its value is 3.
+static int segCurrent(const Ctl& c, const float* val, uint32_t p) {
+    if (c.group == GGlobal && c.field == kQuality) return val[kSuperb] > 0.5f ? 2 : (val[kQuality] > 0.5f ? 1 : 0);
+    if (c.group == GGlobal && c.field == kXSlope) { const int v = (int)std::round(val[kXSlope]); return v == kSlope6 ? 0 : v + 1; }
+    return (int)std::round(val[p]);
+}
 static constexpr float PS_X = 400.f, PS_Y = 18.f, PS_W = 220.f, PS_H = 28.f, PS_ARROW = 28.f;
 static constexpr float A_X = 628.f, AB_W = 30.f, COPY_X = 692.f, COPY_W = 46.f;
 static constexpr float UNDO_X = 750.f, REDO_X = 802.f, UR_W = 48.f, LEARN_X = 862.f, LEARN_W = 66.f, MIDI_X = 932.f, MIDI_W = 48.f, HELP_X = 986.f, HELP_W = 48.f;
@@ -204,14 +215,14 @@ protected:
     // ---- undo / redo / A-B --------------------------------------------------------
     typedef std::vector<float> Snap;
     Snap snapshot() const { Snap s(val, val + kParamCount); s.push_back((float)abSlot); return s; }
-    bool differs(const float* a, const float* b) const { for (uint32_t i = 0; i < kOutLearn; ++i) if (a[i] != b[i]) return true; return false; }
+    bool differs(const float* a, const float* b) const { for (uint32_t i = 0; i < kParamCount; ++i) if (isSetting(i) && a[i] != b[i]) return true; return false; }
     void beginGesture() { gesture = true; std::copy(val, val + kParamCount, before); }
     void endGesture() {
         gesture = false;
         if (differs(before, val)) { Snap u(before, before + kParamCount); u.push_back((float)abSlot); undoStack.push_back(u); if (undoStack.size() > 200) undoStack.erase(undoStack.begin()); redoStack.clear(); }
         std::copy(val, val + kParamCount, before); repaint();
     }
-    void applyAll(const float* s) { for (uint32_t i = 0; i < kOutLearn; ++i) if (val[i] != s[i]) commit(i, s[i]); if (selBand >= nb()) selBand = nb() - 1; }
+    void applyAll(const float* s) { for (uint32_t i = 0; i < kParamCount; ++i) if (isSetting(i) && val[i] != s[i]) commit(i, s[i]); if (selBand >= nb()) selBand = nb() - 1; }
     void restoreSnap(const Snap& s) {
         if (s.size() > kParamCount && (int)s[kParamCount] != abSlot) { abStore[abSlot] = snapshot(); abSlot = (int)s[kParamCount]; }
         applyAll(s.data()); std::copy(val, val + kParamCount, before);
@@ -301,6 +312,7 @@ protected:
         if (dragSrc > 0) drawChip(dragSrc, dragPX - CHIP_W / 2, dragPY - CHIP_H / 2, true, true);
         if (editing >= 0) drawEditBox();
         drawStatus();
+        if (kpan.open) drawKnobPanel();
         if (popup.open) drawPopup();
         if (menuOpen) drawPresetMenu();
         if (saving) drawSaveBox();
@@ -324,7 +336,7 @@ protected:
         beginPath(); moveTo(26, 27); lineTo(24, 40); moveTo(35, 24); lineTo(37, 41); strokeColor(withAlpha(Color(0xff, 0xb1, 0x3d), 0.8f)); strokeWidth(1.2f); stroke();
         fontSize(22); textLetterSpacing(9); fillColor(C_TEXT); textAlign(ALIGN_LEFT | ALIGN_MIDDLE); text(56, 33, "MAGMA", nullptr);
         fontSize(9); textLetterSpacing(2.2f); fillColor(C_DIM); text(196, 28, "MULTIBAND DISTORTION", nullptr);
-        fontSize(7); textLetterSpacing(1.1f); fillColor(C_FAINT); text(196, 40, "EPSILON AUDIO 1.0", nullptr);
+        fontSize(7); textLetterSpacing(1.1f); fillColor(C_FAINT); text(196, 40, "EPSILON AUDIO 2.0", nullptr);
         drawPresetBar();
         for (int k = 0; k < 2; ++k) {
             const float x = A_X + k * AB_W; const bool on = abSlot == k, hot = hoverHeader == 6 + k;
@@ -443,7 +455,7 @@ protected:
     void drawGlobalPanel() {
         panel(GX, GY, GW, GH);
         caption(GX + 100, GY + 24, "CHANNELS", ALIGN_CENTER); caption(GX + 286, GY + 24, "QUALITY", ALIGN_CENTER);
-        caption(GX + 100, GY + 84, "CROSSOVER SLOPE", ALIGN_CENTER);
+        caption(GX + 100, GY + 84, "CROSSOVER SLOPE", ALIGN_CENTER); caption(GX + 286, GY + 84, "CROSSOVER PHASE", ALIGN_CENTER);
     }
 
     // ---- modulation sources ----------------------------------------------------
@@ -473,6 +485,43 @@ protected:
         else if (tab <= 9) drawXy(tab - 8);
         else drawMidi();
         for (const Chip& c : chips()) drawChip(c.src, c.x, c.y, hoverChip == c.src, false);
+        if (tab <= 7) {
+            const bool hot = hoverComp || (popup.open && popup.kind == 3);
+            beginPath(); roundedRect(COMP_X, COMP_Y, COMP_W, COMP_H, 4); fillColor(hot ? C_PANEL_HI : Color(0x22, 0x1d, 0x1a)); fill(); strokeColor(hot ? C_DIM : C_LINE); strokeWidth(1); stroke();
+            fontSize(8); textLetterSpacing(1.2f); textAlign(ALIGN_LEFT | ALIGN_MIDDLE); fillColor(hot ? C_TEXT : C_DIM);
+            text(COMP_X + 10, COMP_Y + COMP_H / 2 + 0.5f, tab <= 3 ? "LFO PRESETS" : (tab <= 5 ? "EG PRESETS" : "EF PRESETS"), nullptr);
+            beginPath(); const float ax = COMP_X + COMP_W - 12, ay = COMP_Y + COMP_H / 2; moveTo(ax - 3.5f, ay - 2); lineTo(ax + 3.5f, ay - 2); lineTo(ax, ay + 2.5f); closePath(); fillColor(C_DIM); fill();
+        }
+    }
+    // ---- per-source presets ----------------------------------------------------------
+    int compKind() const { return tab <= 3 ? kCompXlfo : (tab <= 5 ? kCompEg : kCompEf); }
+    int compIndex() const { return tab <= 3 ? tab : (tab <= 5 ? tab - 4 : tab - 6); }
+    bool compHit(float x, float y) const { return tab <= 7 && inRect(x, y, COMP_X, COMP_Y, COMP_W, COMP_H); }
+    struct CompItem { int type, idx; std::string name; };       // type 0 factory, 1 user file, 2 save
+    std::vector<CompItem> compItems; int compPendingDel = -1; bool savingComp = false; int savingCompKind = 0, savingCompIdx = 0; bool hoverComp = false;
+    void openCompMenu() {
+        compItems.clear(); const int k = compKind();
+        for (int i : compFactoryFor(k)) compItems.push_back({ 0, i, compFactory()[i].name });
+        const std::vector<std::string> u = listCompPresets(k);
+        for (int i = 0; i < (int)u.size(); ++i) compItems.push_back({ 1, i, u[i] });
+        compItems.push_back({ 2, 0, "Save current..." });
+        compPendingDel = -1; popup.open = true; popup.kind = 3; popup.slot = -1; popup.x = COMP_X + COMP_W - 186; popup.y = COMP_Y + COMP_H + 4;
+        const float ph = compItems.size() * 20.f + 12; if (popup.y + ph > H - 8) popup.y = COMP_Y - ph - 4;
+        popup.hover = -1; repaint();
+    }
+    void applyComp(const float* fields) {
+        const int k = compKind(), ix = compIndex();
+        beginGesture(); for (int f = 0; f < compFieldCount(k); ++f) commit(compParam(k, ix, f), fields[f]); endGesture();
+    }
+    void pickComp(int i) {
+        const CompItem it = compItems[i]; const int k = compKind();
+        float fv[kXlfoFields];
+        if (it.type == 0) { compFactoryValues(it.idx, fv); applyComp(fv); flash(std::string(compKindName(k)) + " preset: " + it.name); }
+        else if (it.type == 1) {
+            if (compPendingDel == i) { deleteCompPreset(k, it.name); openCompMenu(); return; }
+            if (loadCompPreset(k, it.name, fv)) { applyComp(fv); flash(std::string(compKindName(k)) + " preset: " + it.name); }
+        } else { savingComp = true; savingCompKind = k; savingCompIdx = compIndex(); saving = true; saveError = false; saveName.clear(); }
+        popup.open = false; repaint();
     }
     bool sourceUsed(int s) const { for (int k = 0; k < kNumSlots; ++k) if ((int)std::round(val[sp(k, kSlotSrc)]) == s && (int)std::round(val[sp(k, kSlotDst)]) > 0) return true; return false; }
     bool anyMidiUsed() const { for (int s = kSrcVelocity; s < kNumSources; ++s) if (sourceUsed(s)) return true; return false; }
@@ -592,6 +641,57 @@ protected:
         return -1;
     }
 
+    // ---- floating slot panel: every slot that modulates one knob ---------------------
+    struct KnobPanel { bool open = false; int dest = 0; float x = 0, y = 0; } kpan; int hoverKp = -1;
+    static constexpr float KP_W = 260, KP_HEAD = 26, KP_ROWH = 22;
+    std::vector<int> slotsFor(int d) const { std::vector<int> v; for (int k = 0; k < kNumSlots; ++k) if ((int)std::round(val[sp(k, kSlotDst)]) == d && (int)std::round(val[sp(k, kSlotSrc)]) > 0) v.push_back(k); return v; }
+    void kpLayout(float& x, float& y, float& h) const {
+        h = KP_HEAD + std::max<size_t>(1, slotsFor(kpan.dest).size()) * KP_ROWH + 8;
+        x = std::min(W - KP_W - 8, std::max(8.f, kpan.x)); y = std::min(H - h - 8, std::max(8.f, kpan.y));
+    }
+    bool kpInside(float px, float py) const { float x, y, h; kpLayout(x, y, h); return px >= x && px < x + KP_W && py >= y && py < y + h; }
+    // slot*10 + part (1 source, 3 amount, 4 bypass, 5 delete), or -1
+    int kpHit(float px, float py) const {
+        float x, y, h; kpLayout(x, y, h); const std::vector<int> v = slotsFor(kpan.dest);
+        for (int i = 0; i < (int)v.size(); ++i) { const float ry = y + KP_HEAD + i * KP_ROWH; if (py < ry || py >= ry + KP_ROWH || px < x || px >= x + KP_W) continue;
+            const float rx = px - x; return v[i] * 10 + (rx < 120 ? 1 : (rx < KP_W - 44 ? 3 : (rx < KP_W - 24 ? 4 : 5))); }
+        return -1;
+    }
+    void openKnobPanel(uint32_t p, float px, float py) {
+        const int d = destForParam(p); if (d <= 0) return;
+        if (slotsFor(d).empty()) { flash("Nothing modulates this control yet. Drag a source chip onto it."); return; }
+        kpan.open = true; kpan.dest = d; kpan.x = px + 14; kpan.y = py - 10; hoverKp = -1; repaint();
+    }
+    void drawKnobPanel() {
+        float x, y, h; kpLayout(x, y, h); const std::vector<int> v = slotsFor(kpan.dest);
+        beginPath(); rect(x - 10, y - 4, KP_W + 20, h + 18); fillPaint(boxGradient(x, y + 2, KP_W, h, 6, 12, Color(0, 0, 0, 0.6f), Color(0, 0, 0, 0.f))); fill();
+        beginPath(); roundedRect(x, y, KP_W, h, 6); fillColor(C_PANEL_HI); fill(); strokeColor(C_LINE); strokeWidth(1); stroke();
+        std::string t = destName(kpan.dest); for (char& ch : t) ch = (char)std::toupper((unsigned char)ch);
+        fontSize(8); textLetterSpacing(1.4f); textAlign(ALIGN_LEFT | ALIGN_MIDDLE); fillColor(C_ACC); text(x + 12, y + 14, t.c_str(), nullptr);
+        for (int i = 0; i < (int)v.size(); ++i) {
+            const int sl = v[i], src = (int)std::round(val[sp(sl, kSlotSrc)]); const bool byp = val[sp(sl, kSlotBypass)] > 0.5f;
+            const float ry = y + KP_HEAD + i * KP_ROWH, cy = ry + KP_ROWH / 2;
+            if (hoverKp / 10 == sl) { beginPath(); roundedRect(x + 4, ry + 1, KP_W - 8, KP_ROWH - 2, 3); fillColor(withAlpha(C_ACC, 0.10f)); fill(); }
+            beginPath(); circle(x + 14, cy, 3); fillColor(byp ? C_FAINT : srcColor(src)); fill();
+            fontSize(9); textLetterSpacing(0.4f); textAlign(ALIGN_LEFT | ALIGN_MIDDLE); fillColor(hoverKp == sl * 10 + 1 ? C_TEXT : (byp ? C_FAINT : srcColor(src))); text(x + 24, cy + 0.5f, sourceName(src), nullptr);
+            const uint32_t ap = sp(sl, kSlotAmt); const float kx = x + 132;
+            drawKnobBody(kx, cy, 7.5f, toNorm(ap, val[ap]), true, hoverKp == sl * 10 + 3 || activeSlotAmt == sl, byp, ap);
+            char a[16]; fmt(ap, a, sizeof a); fontSize(8.5f); textAlign(ALIGN_LEFT | ALIGN_MIDDLE); fillColor(byp ? C_FAINT : C_DIM); text(kx + 12, cy + 0.5f, a, nullptr);
+            beginPath(); circle(x + KP_W - 34, cy, 4.5f); fillColor(byp ? C_PANEL : withAlpha(C_ACC, 0.8f)); fill(); strokeColor(byp ? C_FAINT : C_ACC); strokeWidth(1); stroke();
+            const float dx = x + KP_W - 14;
+            beginPath(); moveTo(dx - 3.5f, cy - 3.5f); lineTo(dx + 3.5f, cy + 3.5f); moveTo(dx + 3.5f, cy - 3.5f); lineTo(dx - 3.5f, cy + 3.5f);
+            strokeColor(hoverKp == sl * 10 + 5 ? C_TEXT : C_FAINT); strokeWidth(1.3f); stroke();
+        }
+    }
+    // the modulation ring around a modulated knob (clicking it opens the slot panel)
+    bool ringHit(const Ctl& c, float x, float y) const {
+        if (c.type != Knob || c.r <= 9) return false;
+        const uint32_t p = effParam(c); const int d = destForParam(p); if (d <= 0 || slotsFor(d).empty()) return false;
+        const float tw = c.r > 30 ? 5.f : (c.r > 18 ? 3.5f : (c.r > 10 ? 2.5f : 2.f)), rr = c.r + tw / 2 + 3;
+        const float dist = std::sqrt((x - c.x) * (x - c.x) + (y - c.y) * (y - c.y));
+        return std::fabs(dist - rr) <= 3.f;
+    }
+
     // ---- knobs -------------------------------------------------------------------
     bool modInfo(uint32_t p, float& depth, Color& col, float& live) const {
         const int d = destForParam(p); if (d < 0) return false;
@@ -646,7 +746,7 @@ protected:
             break; }
         case Segment: {
             int n = 0; const char* const* names = segLabels(c.group, c.field, n);
-            const int cur = (int)std::round(val[p]); const float sw = c.r / n, x0 = c.x - c.r / 2;
+            const int cur = segCurrent(c, val, p); const float sw = c.r / n, x0 = c.x - c.r / 2;
             for (int i = 0; i < n; ++i) {
                 const float x = x0 + sw * i;
                 beginPath(); roundedRect(x + 1.5f, c.y - SEG_H / 2, sw - 3, SEG_H, 4); fillColor(i == cur ? C_ACC : C_PANEL_HI); fill();
@@ -695,16 +795,26 @@ protected:
 
     // ---- popups: style, slot source, slot destination ---------------------------
     struct Popup { bool open = false; int kind = 0, slot = -1; float x = 0, y = 0; int hover = -1; } popup;   // kind 0 style, 1 source, 2 destination
-    int popupCount() const { return popup.kind == 0 ? kNumStyles : (popup.kind == 1 ? kNumSources - 1 : kNumDests - 1); }
-    std::string popupLabel(int i) const { return popup.kind == 0 ? styleName(i) : (popup.kind == 1 ? sourceName(i + 1) : destName(i + 1)); }
+    // row of a style inside its family column: the 2.0 styles are slotted in where they belong
+    static int styleRow(int s) {
+        static const int order[] = { 16, 0, 1, 2, 17, 3,  4, 5, 6, 18,  7, 19, 8, 9, 20,  10, 21, 11, 22,  12, 13, 23, 24, 14, 15, 25, 26, 27 };
+        int k = 0, cat = styleCategory(s);
+        for (int o : order) { if (o == s) return k; if (styleCategory(o) == cat) ++k; }
+        return 0;
+    }
+    int popupCount() const { return popup.kind == 0 ? kNumStyles : (popup.kind == 1 ? kNumSources - 1 : (popup.kind == 3 ? (int)compItems.size() : kNumDests - 1)); }
+    std::string popupLabel(int i) const {
+        if (popup.kind == 3) { const CompItem& it = compItems[i]; return it.type == 1 ? (compPendingDel == i ? "Delete? click again" : "  " + it.name) : it.name; }
+        return popup.kind == 0 ? styleName(i) : (popup.kind == 1 ? sourceName(i + 1) : destName(i + 1)); }
     void popupLayout(float& x, float& y, float& w, float& h, int& rows, float& colw) const {
         const int n = popupCount();
-        if (popup.kind == 0) { rows = 4; colw = 132; w = 5 * colw + 12; h = rows * 22 + 12 + 20; }
+        if (popup.kind == 0) { rows = 9; colw = 132; w = 5 * colw + 12; h = rows * 22 + 12 + 20; }
+        else if (popup.kind == 3) { rows = n; colw = 180; w = colw + 12; h = rows * 20 + 12; }
         else { rows = popup.kind == 1 ? 9 : 22; const int cols = (n + rows - 1) / rows; colw = popup.kind == 1 ? 110 : 150; w = cols * colw + 12; h = rows * 20 + 12; }
         x = std::min(W - w - 8, std::max(8.f, popup.x)); y = std::min(H - h - 8, std::max(8.f, popup.y));
     }
     void popupCell(int i, float x, float y, float colw, int rows, float& ix, float& iy) const {
-        if (popup.kind == 0) { const int cat = styleCategory(i); int k = 0; for (int s = 0; s < i; ++s) if (styleCategory(s) == cat) ++k; ix = x + 6 + cat * colw; iy = y + 6 + 20 + k * 22; return; }
+        if (popup.kind == 0) { const int cat = styleCategory(i); const int k = styleRow(i); ix = x + 6 + cat * colw; iy = y + 6 + 20 + k * 22; return; }
         ix = x + 6 + (i / rows) * colw; iy = y + 6 + (i % rows) * 20;
     }
     void drawPopup() {
@@ -720,7 +830,9 @@ protected:
             float ix, iy; popupCell(i, x, y, colw, rows, ix, iy); const float rh = popup.kind == 0 ? 22 : 20;
             if (i == popup.hover) { beginPath(); roundedRect(ix, iy, colw - 4, rh, 3); fillColor(withAlpha(C_ACC, 0.22f)); fill(); }
             if (popup.kind == 1) { beginPath(); circle(ix + 7, iy + rh / 2, 3); fillColor(srcColor(i + 1)); fill(); }
-            fontSize(popup.kind == 0 ? 10.5f : 9.5f); textLetterSpacing(0.3f); textAlign(ALIGN_LEFT | ALIGN_MIDDLE); fillColor(i == cur ? C_ACC : (i == popup.hover ? C_TEXT : C_DIM));
+            if (popup.kind == 3 && i > 0 && compItems[i].type != compItems[i - 1].type) { beginPath(); rect(ix + 4, iy - 0.5f, colw - 12, 1); fillColor(C_LINE); fill(); }
+            const bool accent = popup.kind == 3 && (compItems[i].type == 2 || compPendingDel == i);
+            fontSize(popup.kind == 0 ? 10.5f : 9.5f); textLetterSpacing(0.3f); textAlign(ALIGN_LEFT | ALIGN_MIDDLE); fillColor(i == cur || accent ? C_ACC : (i == popup.hover ? C_TEXT : C_DIM));
             text(ix + (popup.kind == 1 ? 15 : 6), iy + rh / 2 + 0.5f, popupLabel(i).c_str(), nullptr);
         }
     }
@@ -732,6 +844,7 @@ protected:
     }
     bool popupInside(float px, float py) const { float x, y, w, h, colw; int rows; popupLayout(x, y, w, h, rows, colw); return px >= x && px < x + w && py >= y && py < y + h; }
     void popupPick(int i) {
+        if (popup.kind == 3) { pickComp(i); return; }
         beginGesture();
         if (popup.kind == 0) commit(bp(selBand, kBStyle), (float)i);
         else if (popup.slot >= 0) commit(sp(popup.slot, popup.kind == 1 ? kSlotSrc : kSlotDst), (float)(i + 1));
@@ -739,7 +852,7 @@ protected:
     }
 
     // ---- presets ------------------------------------------------------------------
-    bool matchesValues(const float* v) const { for (uint32_t i = 0; i < kOutLearn; ++i) if (std::fabs(val[i] - v[i]) > 1e-4f * std::max(1.f, std::fabs(v[i]))) return false; return true; }
+    bool matchesValues(const float* v) const { for (uint32_t i = 0; i < kParamCount; ++i) if (isSetting(i) && std::fabs(val[i] - v[i]) > 1e-4f * std::max(1.f, std::fabs(v[i]))) return false; return true; }
     void applyValues(const float* v) { beginGesture(); applyAll(v); endGesture(); }
     void applyFactory(int idx) { idx = (idx % (int)kNumPresets + (int)kNumPresets) % (int)kNumPresets; applyValues(presets()[idx].v); curFactory = idx; curUser.clear(); selBand = 0; repaint(); }
     void applyUser(const std::string& name) { float v[kParamCount]; std::copy(defv, defv + kParamCount, v); if (!loadUserPreset(name, v)) return; applyValues(v); std::copy(v, v + kParamCount, userVals); curUser = name; curFactory = -1; selBand = 0; repaint(); }
@@ -811,7 +924,7 @@ protected:
         const float w = 360, h = 96, x = W / 2 - w / 2, y = 150;
         beginPath(); rect(0, 0, W, H); fillColor(Color(0, 0, 0, 0.45f)); fill();
         beginPath(); roundedRect(x, y, w, h, 8); fillColor(C_PANEL_HI); fill(); strokeColor(C_ACC); strokeWidth(1); stroke();
-        fontSize(9.5f); textLetterSpacing(2.f); textAlign(ALIGN_LEFT | ALIGN_TOP); fillColor(C_DIM); text(x + 16, y + 14, "SAVE PRESET AS", nullptr);
+        fontSize(9.5f); textLetterSpacing(2.f); textAlign(ALIGN_LEFT | ALIGN_TOP); fillColor(C_DIM); text(x + 16, y + 14, savingComp ? (savingCompKind == kCompXlfo ? "SAVE LFO PRESET AS" : (savingCompKind == kCompEg ? "SAVE ENVELOPE PRESET AS" : "SAVE FOLLOWER PRESET AS")) : "SAVE PRESET AS", nullptr);
         beginPath(); roundedRect(x + 16, y + 36, w - 32, 26, 4); fillColor(C_DISPLAY); fill(); strokeColor(C_LINE); stroke();
         fontSize(13); textLetterSpacing(0.4f); textAlign(ALIGN_LEFT | ALIGN_MIDDLE); fillColor(C_TEXT); text(x + 26, y + 49.5f, (saveName + "|").c_str(), nullptr);
         fontSize(8.5f); textLetterSpacing(1.2f); fillColor(C_FAINT); textAlign(ALIGN_RIGHT | ALIGN_TOP);
@@ -945,15 +1058,18 @@ protected:
             const bool cmd = (ev.mod & (kModifierControl | kModifierSuper)) != 0;
             if (cmd && (ev.key == 'z' || ev.key == 'Z')) { if (ev.mod & kModifierShift) redo(); else undo(); return true; }
             if (cmd && (ev.key == 'y' || ev.key == 'Y')) { redo(); return true; }
-            if (ev.key == kKeyEscape) { if (helpOpen) helpOpen = false; else if (popup.open) popup.open = false; else if (learnMode) setLearn(false); repaint(); return true; }
+            if (ev.key == kKeyEscape) { if (helpOpen) helpOpen = false; else if (popup.open) popup.open = false; else if (kpan.open) kpan.open = false; else if (learnMode) setLearn(false); repaint(); return true; }
             return false;
         }
         if (ev.key == kKeyEnter) {
-            if (saving) { if (saveUserPreset(saveName, val)) { userPresets = listUserPresets(); curUser = sanitizeName(saveName); curFactory = -1; std::copy(val, val + kParamCount, userVals); saving = false; saveError = false; } else saveError = true; }
+            if (saving && savingComp) {
+                float fv[kXlfoFields]; for (int f = 0; f < compFieldCount(savingCompKind); ++f) fv[f] = val[compParam(savingCompKind, savingCompIdx, f)];
+                if (saveCompPreset(savingCompKind, saveName, fv)) { saving = savingComp = false; saveError = false; flash("Saved " + sanitizeName(saveName)); } else saveError = true; }
+            else if (saving) { if (saveUserPreset(saveName, val)) { userPresets = listUserPresets(); curUser = sanitizeName(saveName); curFactory = -1; std::copy(val, val + kParamCount, userVals); saving = false; saveError = false; } else saveError = true; }
             else endEdit(true);
             repaint(); return true;
         }
-        if (ev.key == kKeyEscape) { if (saving) saving = false; else endEdit(false); repaint(); return true; }
+        if (ev.key == kKeyEscape) { if (saving) saving = savingComp = false; else endEdit(false); repaint(); return true; }
         if (ev.key == kKeyBackspace || ev.key == kKeyDelete) { if (!buf->empty()) buf->pop_back(); repaint(); return true; }
         if (ev.key >= 32 && ev.key < 127 && buf->size() < (saving ? 40u : 12u)) { *buf += (char)ev.key; repaint(); return true; }
         return true;
@@ -965,9 +1081,11 @@ protected:
         if (ev.press) { statusFlash = 0; tipShown = false; tipSuppressed = tipKey; }
         if (helpOpen) { if (ev.press && ev.button == 1) helpClick(x, y); return true; }
         if (ev.button == 2 && ev.press) {                  // right-click (DPF numbers buttons 1 left, 2 right, 3 middle)
+            if (popup.open && popup.kind == 3) { const int m = popupHit(x, y); compPendingDel = (m >= 0 && compItems[m].type == 1) ? m : -1; repaint(); return true; }
             if (menuOpen) { const int m = menuHit(x, y); if (m >= 0 && menuItem(m).kind == 1) { pendingDelete = menuItem(m).idx; repaint(); } return true; }
             if (learnMode) { const int i = hit(x, y); if (i >= 0) { const uint32_t p = effParam(controls()[i]); char b[24]; snprintf(b, sizeof b, "unmap:%u", p); setState("cmd", b); paramCC[p] = -1; repaint(); } return true; }
             const int dv = divHit(x, y); if (dv >= 0) { removeBand(dv + 1 < nb() ? dv : dv); return true; }
+            { const int i = hit(x, y); if (i >= 0 && controls()[i].type == Knob) { popup.open = false; openKnobPanel(effParam(controls()[i]), x, y); return true; } }
             return false;
         }
         if (ev.button != 1) return false;
@@ -985,6 +1103,19 @@ protected:
         }
         if (editing >= 0) endEdit(true);
         if (popup.open) { const int i = popupHit(x, y); if (i >= 0) popupPick(i); else if (!popupInside(x, y)) popup.open = false; repaint(); return true; }
+        if (kpan.open) {
+            const int part = kpHit(x, y);
+            if (part < 0) { if (!kpInside(x, y)) kpan.open = false; repaint(); return true; }
+            const int sl = part / 10, k = part % 10;
+            if (k == 1) { popup.open = true; popup.kind = 1; popup.slot = sl; popup.x = x - 40; popup.y = y + 12; popup.hover = -1; repaint(); return true; }
+            if (k == 3) { const uint32_t ap = sp(sl, kSlotAmt);
+                if (ev.mod & (kModifierControl | kModifierSuper)) { beginGesture(); commit(ap, 0.f); endGesture(); return true; }
+                beginGesture(); activeSlotAmt = sl; dragY = y; dragNorm = toNorm(ap, val[ap]); editParameter(ap, true); repaint(); return true; }
+            if (k == 4) { beginGesture(); commit(sp(sl, kSlotBypass), val[sp(sl, kSlotBypass)] > 0.5f ? 0.f : 1.f); endGesture(); return true; }
+            beginGesture(); clearSlot(sl); endGesture(); if (selSlot == sl) selSlot = -1;
+            if (slotsFor(kpan.dest).empty()) kpan.open = false;
+            const int maxScroll = std::max(0, ((int)usedSlots().size() + 1) / 2 - SLOT_ROWS); slotScroll = std::min(slotScroll, maxScroll); repaint(); return true;
+        }
         if (menuOpen) {
             const int m = menuHit(x, y);
             if (m >= 0) { const MRect r = menuItem(m);
@@ -1005,6 +1136,7 @@ protected:
         if (pb == 1) { userPresets = listUserPresets(); menuOpen = true; menuHover = -1; pendingDelete = -1; repaint(); return true; }
         if (clearHit(x, y)) { setState("cmd", "clear"); for (int& m : paramCC) m = -1; repaint(); return true; }
         const int tb = tabHit(x, y); if (tb >= 0) { tab = tb; repaint(); return true; }
+        if (compHit(x, y) && !learnMode) { openCompMenu(); return true; }
         if (!learnMode) { const int ch = chipHit(x, y); if (ch > 0) { dragSrc = ch; dragPX = x; dragPY = y; repaint(); return true; } }
         if (styleHit(x, y) && !learnMode) { popup.open = true; popup.kind = 0; popup.slot = -1; popup.x = STYLE_X; popup.y = BY + 42; popup.hover = -1; repaint(); return true; }
         if (removeHit(x, y) && !learnMode) { removeBand(selBand); return true; }
@@ -1020,11 +1152,17 @@ protected:
             if (k == 5) { beginGesture(); clearSlot(sl); endGesture(); selSlot = -1; const int maxScroll = std::max(0, ((int)usedSlots().size() + 1) / 2 - SLOT_ROWS); slotScroll = std::min(slotScroll, maxScroll); return true; }
         }
         int seg = 0; const int i = hit(x, y, &seg);
+        if (i >= 0 && !learnMode && ringHit(controls()[i], x, y)) { openKnobPanel(effParam(controls()[i]), x, y); return true; }
         if (i >= 0) {
             const Ctl& c = controls()[i]; const uint32_t p = effParam(c);
             if (learnMode) { learnWaiting = (int)p; char b[24]; snprintf(b, sizeof b, "learn:%u", p); setState("cmd", b); repaint(); return true; }
             if (c.type == Toggle) { beginGesture(); commit(p, val[p] > 0.5f ? 0.f : 1.f); endGesture(); return true; }
-            if (c.type == Segment) { beginGesture(); commit(p, (float)seg); endGesture(); return true; }
+            if (c.type == Segment) {
+                beginGesture();
+                if (c.group == GGlobal && c.field == kQuality) { commit(kQuality, seg > 0 ? 1.f : 0.f); commit(kSuperb, seg == 2 ? 1.f : 0.f); }
+                else if (c.group == GGlobal && c.field == kXSlope) commit(kXSlope, seg == 0 ? (float)kSlope6 : (float)(seg - 1));
+                else commit(p, (float)seg);
+                endGesture(); return true; }
             if (c.type == Stepper) { const ParamDef& d = paramDef(p); float v = val[p] + seg; if (v > d.max) v = d.min; if (v < d.min) v = d.max; beginGesture(); commit(p, v); endGesture(); return true; }
             if (ev.mod & (kModifierControl | kModifierSuper)) { beginGesture(); commit(p, defv[p]); endGesture(); return true; }
             if (i == lastClick && ev.time - lastClickTime < 350) {
@@ -1062,6 +1200,7 @@ protected:
         if (helpOpen) { const int h = helpHit(x, y); if (h != helpHover) { helpHover = h; repaint(); } return true; }
         if (dragSrc > 0) { dragPX = x; dragPY = y; hover = hit(x, y); repaint(); return true; }
         if (popup.open) { const int h = popupHit(x, y); if (h != popup.hover) { popup.hover = h; repaint(); } return true; }
+        if (kpan.open && activeSlotAmt < 0) { const int h = kpHit(x, y); if (h != hoverKp) { hoverKp = h; repaint(); } return true; }
         const float fine = (ev.mod & kModifierShift) ? 0.2f : 1.f;
         if (active >= 0) {
             const Ctl& c = controls()[active]; const uint32_t p = effParam(c);
@@ -1085,13 +1224,15 @@ protected:
         const int hb = inDisplay(x, y) ? bandAt(x) : -1; if (hb != hoverBand) { hoverBand = hb; repaint(); }
         const int tb = tabHit(x, y); if (tb != hoverTab) { hoverTab = tb; repaint(); }
         const int ch = chipHit(x, y); if (ch != hoverChip) { hoverChip = ch; repaint(); }
+        const bool hcp = compHit(x, y); if (hcp != hoverComp) { hoverComp = hcp; repaint(); }
         const bool hs = styleHit(x, y); if (hs != hoverStyle) { hoverStyle = hs; repaint(); }
         const bool hr = removeHit(x, y); if (hr != hoverRemove) { hoverRemove = hr; repaint(); }
         const int part = slotPartHit(x, y); if (part != hoverSlotPart) { hoverSlotPart = part; repaint(); }
         // tips
         int key = -1;
-        if (h >= 0) key = h; else if (hh > 0) key = 1000 + hh; else if (pb >= 0) key = 2000 + pb;
+        if (h >= 0 && ringHit(controls()[h], x, y)) key = 4008; else if (h >= 0) key = h; else if (hh > 0) key = 1000 + hh; else if (pb >= 0) key = 2000 + pb;
         else if (ch > 0) key = 3000 + ch; else if (dv >= 0) key = 4000; else if (hs) key = 4001; else if (hr) key = 4002;
+        else if (hcp) key = 4007;
         else if (stepHit(x, y)) key = 4003; else if (xyHit(x, y)) key = 4004; else if (tb >= 0) key = 4005; else if (part >= 0) key = 5000 + part; else if (hb >= 0) key = 4006;
         tipX = x; tipY = y;
         if (key != tipKey) { const bool was = tipShown; tipKey = key; tipSince = nowSec(); tipShown = false; if (key != tipSuppressed) tipSuppressed = -2; if (was) repaint(); }
@@ -1126,7 +1267,7 @@ protected:
             }
             repaint();
         }
-        if (gTipsOn && !tipShown && tipKey >= 0 && tipKey != tipSuppressed && active < 0 && dragSrc <= 0 && dragDiv < 0 && dragDriveBand < 0 && !menuOpen && !saving && !helpOpen && !popup.open && editing < 0
+        if (gTipsOn && !tipShown && tipKey >= 0 && tipKey != tipSuppressed && active < 0 && dragSrc <= 0 && dragDiv < 0 && dragDriveBand < 0 && !menuOpen && !saving && !helpOpen && !popup.open && !kpan.open && editing < 0
             && t - tipSince > 0.6) { tipShown = true; repaint(); }
     }
     // the XLFO phase is not exposed; estimate it from the source value's history for the display
@@ -1159,7 +1300,7 @@ protected:
         if (tipKey < 0) return false;
         char b[64];
         if (tipKey < 1000) { const uint32_t p = effParam(controls()[tipKey]); fmt(p, b, sizeof b); title = paramDef(p).name; value = b; body = paramTip(p);
-            if (controls()[tipKey].type == Knob) body += "\n\nDrag up/down or grab the rim. Double-click to type, Cmd/Ctrl-click to reset. Drop a modulation chip here to modulate it.";
+            if (controls()[tipKey].type == Knob) body += "\n\nDrag up/down or grab the rim. Double-click to type, Cmd/Ctrl-click to reset. Drop a modulation chip here to modulate it; right-click to list the slots that modulate it.";
             if (paramCC[p] >= 0) { char cc[24]; snprintf(cc, sizeof cc, "   ·   CC%d", paramCC[p]); value += cc; }
             return true; }
         if (tipKey >= 5000) { const int sl = (tipKey - 5000) / 10, k = (tipKey - 5000) % 10; static const int f[6] = { 0, kSlotSrc, kSlotDst, kSlotAmt, kSlotBypass, kSlotSrc };
@@ -1167,7 +1308,7 @@ protected:
         if (tipKey >= 3000 && tipKey < 4000) { title = sourceName(tipKey - 3000); value.clear(); body = targetTip(kTipChip); return true; }
         int t = -1;
         switch (tipKey) { case 4000: t = kTipDivider; break; case 4001: t = -2; break; case 4002: t = kTipRemoveBand; break; case 4003: t = kTipStepEdit; break;
-                          case 4004: t = kTipXyPad; break; case 4005: t = kTipSourceTab; break; case 4006: t = kTipDisplay; break; default: break; }
+                          case 4004: t = kTipXyPad; break; case 4005: t = kTipSourceTab; break; case 4006: t = kTipDisplay; break; case 4007: t = kTipCompPresets; break; case 4008: t = kTipModRing; break; default: break; }
         if (t == -2) { const int st = (int)std::round(val[bp(selBand, kBStyle)]); title = "Style"; value = styleName(st); body = std::string(styleTip(st)) + "\n\nClick to choose another style."; return true; }
         if (t < 0 && tipKey >= 2000) t = kTipPrev + (tipKey - 2000);
         if (t < 0) { const int hh = tipKey - 1000; t = hh == 1 ? kTipLearn : hh == 2 ? kTipMidi : hh == 3 ? kTipUndo : hh == 4 ? kTipRedo : hh == 5 ? kTipHelp : hh == 6 ? kTipA : hh == 7 ? kTipB : kTipCopy; }

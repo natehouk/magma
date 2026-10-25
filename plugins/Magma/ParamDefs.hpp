@@ -79,6 +79,7 @@ inline const ParamDef& paramDef(uint32_t i) {
         static const char* const ss[kSlotFields] = { "src", "dst", "amt", "byp" };
         for (int s = 0; s < kNumSlots; ++s) for (int f = 0; f < kSlotFields; ++f) set(sp(s, f), "Slot " + std::to_string(s + 1) + " " + sn[f], "s" + std::to_string(s + 1) + ss[f], "", f == kSlotBypass ? B : 0);
         set(kOutLearn, "MIDI Learn", "o_learn", "", kHintOutput);
+        set(kXPhase, "Crossover Phase", "xphase", "", 0); set(kSuperb, "Superb Quality", "superb", "", B);
     }
     return t[i];
 }
@@ -86,7 +87,8 @@ inline const ParamDef& paramDef(uint32_t i) {
 inline const char* const* enumLabels(uint32_t p, int& count) {
     static const char* styles[kNumStyles]; static bool sinit = false;
     if (!sinit) { sinit = true; for (int i = 0; i < kNumStyles; ++i) styles[i] = styleName(i); }
-    static const char* const slope[] = { "12 dB/oct", "24 dB/oct", "48 dB/oct" };
+    static const char* const slope[] = { "12 dB/oct", "24 dB/oct", "48 dB/oct", "6 dB/oct" };
+    static const char* const phase[] = { "Natural", "Linear" };
     static const char* const chm[] = { "Stereo", "Mid/Side" };
     static const char* const lmode[] = { "Wave", "Steps" };
     static const char* const wave[] = { "Sine", "Triangle", "Saw Up", "Saw Down", "Square", "Random", "Sample & Hold" };
@@ -97,7 +99,8 @@ inline const char* const* enumLabels(uint32_t p, int& count) {
     static const char* srcs[kNumSources]; static const char* dsts[kNumDests]; static bool init = false;
     if (!init) { init = true; for (int i = 0; i < kNumSources; ++i) srcs[i] = sourceName(i); for (int i = 0; i < kNumDests; ++i) dsts[i] = destName(i); }
     count = 0;
-    if (p == kXSlope) { count = 3; return slope; }
+    if (p == kXSlope) { count = 4; return slope; }
+    if (p == kXPhase) { count = 2; return phase; }
     if (p == kChannelMode) { count = 2; return chm; }
     if (p >= kBandFirst && p < kXlfoFirst && (p - kBandFirst) % kBandFields == kBStyle) { count = kNumStyles; return styles; }
     if (p >= kXlfoFirst && p < kEgFirst) {
@@ -117,6 +120,8 @@ inline const char* const* enumLabels(uint32_t p, int& count) {
     return nullptr;
 }
 
+// every parameter except the MIDI Learn output is a setting (saved in presets, A/B and undo)
+inline bool isSetting(uint32_t p) { return p < kParamCount && p != kOutLearn; }
 inline bool isSlotAmount(uint32_t p) { return p >= kSlotFirst && p < kOutLearn && (p - kSlotFirst) % kSlotFields == kSlotAmt; }
 // normalised 0..1 <-> value; slot amounts use a square-law curve so small amounts are easy to set
 inline float toNorm(uint32_t p, float v) {

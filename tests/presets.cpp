@@ -13,7 +13,7 @@ int main() {
         x[i] = 0.25f * hit * std::sin(2 * kPi * (50 + 80 * std::exp(-t * 40)) * t) + 0.12f * lp * (std::fmod(i / (float)SR, 0.25f) < 0.06f) + 0.12f * std::sin(2 * kPi * 55 * i / (float)SR) + 0.05f * std::sin(2 * kPi * 440 * i / (float)SR); }
     double si = 0; for (float v : x) si += v * v; const double inR = std::sqrt(si / N);
     for (uint32_t p = 0; p < kNumPresets; ++p) {
-        std::unique_ptr<Engine> e(new Engine()); for (uint32_t k = 0; k < kOutLearn; ++k) e->p[k] = presets()[p].v[k]; e->setSampleRate(SR);
+        std::unique_ptr<Engine> e(new Engine()); for (uint32_t k = 0; k < kParamCount; ++k) if (isSetting(k)) e->p[k] = presets()[p].v[k]; e->setSampleRate(SR);
         std::vector<float> L(N), R(N); for (int i = 0; i < N; i += 512) e->process(x.data() + i, x.data() + i, nullptr, nullptr, L.data() + i, R.data() + i, std::min(512, N - i));
         double s = 0; float pk = 0; bool nf = false;
         for (int i = SR / 2; i < N; ++i) { s += L[i] * L[i] + R[i] * R[i]; pk = std::max(pk, std::max(std::fabs(L[i]), std::fabs(R[i]))); nf |= !std::isfinite(L[i]); }
