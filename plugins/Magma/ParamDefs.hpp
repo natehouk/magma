@@ -9,16 +9,7 @@ namespace magma {
 static constexpr uint32_t kHintInteger = 1, kHintBoolean = 2, kHintLog = 4, kHintOutput = 8, kHintBipolar = 16;
 struct ParamDef { const char* name; const char* sym; const char* unit; float min, max; uint32_t hints; };
 
-inline const char* sourceName(int s) {
-    static const char* const n[kNumSources] = { "None", "XLFO 1", "XLFO 2", "XLFO 3", "XLFO 4", "EG 1", "EG 2", "EF 1", "EF 2",
-        "XY 1 X", "XY 1 Y", "XY 2 X", "XY 2 Y", "Velocity", "Key", "Mod Wheel", "Pitch Bend", "Aftertouch" };
-    return n[s < 0 || s >= kNumSources ? 0 : s];
-}
-inline const char* srcShort(int s) {
-    static const char* const n[kNumSources] = { "-", "XLFO1", "XLFO2", "XLFO3", "XLFO4", "EG1", "EG2", "EF1", "EF2",
-        "XY1 X", "XY1 Y", "XY2 X", "XY2 Y", "VEL", "KEY", "WHEEL", "BEND", "AT" };
-    return n[s < 0 || s >= kNumSources ? 0 : s];
-}
+inline const char* srcShort(int s) { return sourceShort(s); }    // sourceName and sourceShort come from ModSystem
 inline const char* bandFieldName(int f) {
     static const char* const n[kBandFields] = { "Style", "Drive", "Dynamics", "Feedback", "Feedback Freq", "Bass", "Mid", "Treble", "Presence", "Mix", "Level", "Pan", "Mute", "Solo" };
     return n[f];

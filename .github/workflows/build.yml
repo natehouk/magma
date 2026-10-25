@@ -12,11 +12,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Engine tests (1.x behaviour, 2.0 features, 1.x compatibility, fuzz, presets, source presets)
+      - name: Engine tests (1.x behaviour, 2.0 features, 1.x and 2.0 compatibility, fuzz, presets, source presets)
         run: |
           set -e
           cd tests
-          for t in features features2 compat fuzz presets modpresets; do
+          for t in features features2 compat compat2 fuzz presets modpresets; do
             g++ -std=c++17 -O2 -I../plugins/Magma -o $t $t.cpp
             ./$t > $t.log || { tail -40 $t.log | sed 's/^/::error::/'; exit 1; }
             tail -2 $t.log

@@ -159,6 +159,7 @@ g++ -O2 -std=c++17 -I../plugins/Magma features.cpp -o features && ./features    
 g++ -O2 -std=c++17 -I../plugins/Magma features2.cpp -o features2 && ./features2  # 2.0: linear-phase reconstruction, isolation per slope, 6 dB/oct sum,
                                                                                 # aliasing per quality, new styles, sag, transformer, switching while playing
 g++ -O2 -std=c++17 -I../plugins/Magma compat.cpp -o compat && ./compat           # random 1.x settings through the frozen 1.0 engine and 2.0: identical
+g++ -O2 -std=c++17 -I../plugins/Magma compat2.cpp -o compat2 && ./compat2        # random 2.0 settings, MIDI and sidechain through the frozen 2.0.0 engine: identical
 g++ -O2 -std=c++17 -I../plugins/Magma fuzz.cpp -o fuzz && ./fuzz                 # random parameters, modulation and MIDI at 44.1-192 kHz: always finite
 g++ -O2 -std=c++17 -I../plugins/Magma presets.cpp -o presets && ./presets        # plays a test mix through every preset
 g++ -O2 -std=c++17 -I../plugins/Magma modpresets.cpp -o modpresets && ./modpresets  # source presets in range, user files round-trip
@@ -195,13 +196,13 @@ Release checks:
 | `plugins/Magma/Presets.hpp` | Factory presets |
 | `plugins/Magma/UserPresets.hpp` | User preset files |
 | `plugins/Magma/ComponentPresets.hpp` | Factory and user presets for single modulation sources |
-| `plugins/Magma/common/` | Shared Epsilon Audio code (oversampling, convolution, FFT), vendored from epsilon-common |
+| `plugins/Magma/common/` | Shared Epsilon Audio code (oversampling, convolution, FFT, the modulation system), vendored from epsilon-common |
 | `plugins/Magma/Help.hpp` | Hover tip text and in-plugin help pages |
 | `plugins/Magma/MagmaPlugin.hpp/.cpp` | Plugin wrapper: parameters, MIDI, tempo, sidechain, latency, MIDI Learn |
 | `plugins/Magma/MagmaUI.cpp` | Custom vector interface (NanoVG) |
 | `plugins/Magma/Fft.hpp` | Small FFT for the analyser |
 | `docs/MANUAL.md` | User manual (`Magma-Manual.html` is generated from it with pandoc) |
-| `tests/legacy/` | Frozen copy of the 1.0 engine, for the compatibility test |
+| `tests/legacy/` | Frozen copies of the 1.0 and 2.0.0 engines, for the compatibility tests |
 
 ## Changelog
 

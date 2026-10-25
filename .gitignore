@@ -12,3 +12,4 @@ tests/presets
 tests/modpresets
 tests/bench
 tests/*.log
+tests/compat2

@@ -10,6 +10,7 @@
 #pragma once
 #include "common/Halfband.hpp"
 #include "common/Convolver.hpp"
+#include "common/ModSystem.hpp"
 #include <atomic>
 #include <cmath>
 #include <cstdint>
@@ -25,15 +26,13 @@ inline float dbToGain(float db) { return std::pow(10.f, db / 20.f); }
 inline float gainToDb(float g) { return 20.f * std::log10(std::max(g, 1e-9f)); }
 
 static constexpr int kMaxBands = 6, kNumStyles = 28, kNumStyles1 = 16, kNumSlots = 50;
-static constexpr int kNumXlfo = 4, kNumSteps = 16, kNumEg = 2, kNumEf = 2, kNumXy = 2;
+// modulation sources, fields and the matrix are shared (epsilon-common ModSystem)
+using epsilon::mod::kNumXlfo; using epsilon::mod::kNumSteps; using epsilon::mod::kNumEg; using epsilon::mod::kNumEf; using epsilon::mod::kNumXy;
 static constexpr int kCtl = 16;                     // modulation and coefficients update every kCtl samples
 
 // ------------------------------------------------------------------ params (append-only)
 enum BandField { kBStyle, kBDrive, kBDynamics, kBFbAmt, kBFbFreq, kBBass, kBMid, kBTreble, kBPresence, kBMix, kBLevel, kBPan, kBMute, kBSolo, kBandFields };
-enum XlfoField { kLMode, kLWave, kLRate, kLSync, kLDiv, kLBalance, kLGlide, kLSteps, kLStep1, kXlfoFields = kLStep1 + kNumSteps };
-enum EgField { kEAttack, kEDecay, kESustain, kERelease, kETrigger, kEThreshold, kEgFields };
-enum EfField { kFAttack, kFRelease, kFGain, kFSource, kEfFields };
-enum SlotField { kSlotSrc, kSlotDst, kSlotAmt, kSlotBypass, kSlotFields };
+using namespace epsilon::mod;     // field enums (kLRate, kEAttack, ...), Source, Xlfo, ADSR, divBars
 
 enum Param : uint32_t {
     kNumBands, kX1, kX2, kX3, kX4, kX5, kXSlope, kChannelMode, kQuality, kAutoMute, kMix, kOutGain, kMidiOn,
@@ -112,8 +111,6 @@ inline float valueOf(uint32_t p, float n) {
 }
 
 // ------------------------------------------------------------------ modulation sources and destinations
-enum Source { kSrcNone, kSrcXlfo1, kSrcXlfo2, kSrcXlfo3, kSrcXlfo4, kSrcEg1, kSrcEg2, kSrcEf1, kSrcEf2,
-              kSrcXy1X, kSrcXy1Y, kSrcXy2X, kSrcXy2Y, kSrcVelocity, kSrcKey, kSrcWheel, kSrcBend, kSrcAftertouch, kNumSources };
 // band destinations: these band fields can be modulated, in this order
 static constexpr int kBandDestFields[] = { kBDrive, kBDynamics, kBFbAmt, kBFbFreq, kBBass, kBMid, kBTreble, kBPresence, kBMix, kBLevel, kBPan };
 static constexpr int kNumBandDests = sizeof(kBandDestFields) / sizeof(kBandDestFields[0]);
@@ -324,49 +321,6 @@ struct StyleCoef {
     int calStyle = -1; float calDrive = -1;
 };
 
-// ------------------------------------------------------------------ modulation sources
-struct ADSR {
-    enum Stage { Idle, Attack, Decay, Sustain, Release } stage = Idle;
-    float value = 0, s = 0.5f, cA = 0, cD = 0, cR = 0;
-    static float coef(float t, float sr) { return 1.f - std::exp(-1.f / std::max(t * sr, 1.f)); }
-    void set(float sr, float A, float D, float S, float R) { s = clampf(S, 0.f, 1.f); cA = coef(A / 1.5f, sr); cD = coef(D / 4.f, sr); cR = coef(R / 4.f, sr); }
-    void gate(bool on) { stage = on ? Attack : (stage == Idle ? Idle : Release); }
-    bool gated() const { return stage == Attack || stage == Decay || stage == Sustain; }
-    float process() {
-        switch (stage) {
-        case Attack:  value += (1.2f - value) * cA; if (value >= 1.f) { value = 1.f; stage = Decay; } break;
-        case Decay:   value += (s - value) * cD; if (std::fabs(value - s) < 1e-4f) { value = s; stage = Sustain; } break;
-        case Sustain: value = s; break;
-        case Release: value -= value * cR; if (value < 1e-5f) { value = 0; stage = Idle; } break;
-        case Idle:    value = 0; break;
-        }
-        return value;
-    }
-};
-// LFO divisions, in bars; sync modes 0 free, 1 straight, 2 dotted, 3 triplet
-static constexpr int kNumDivs = 11;
-inline float divBars(int i) { static const float t[kNumDivs] = { 16, 8, 4, 2, 1, 1.f/2, 1.f/4, 1.f/8, 1.f/16, 1.f/32, 1.f/64 }; return t[i < 0 ? 0 : (i >= kNumDivs ? kNumDivs - 1 : i)]; }
-inline float syncFactor(int s) { return s == 2 ? 1.5f : (s == 3 ? 2.f / 3.f : 1.f); }
-struct Xlfo {
-    double phase = 0; float rndA = 0, rndB = 0, held = 0, stepOut = 0; uint32_t rng = 1; int lastStep = -1;
-    float rnd() { rng = rng * 1664525u + 1013904223u; return (int32_t)rng * (1.f / 2147483648.f); }
-    static float warp(float t, float bal) { bal = clampf(bal, 0.02f, 0.98f); return t < bal ? 0.5f * t / bal : 0.5f + 0.5f * (t - bal) / (1.f - bal); }
-    // wave: 0 sine, 1 triangle, 2 saw up, 3 saw down, 4 square, 5 random (gliding), 6 sample & hold
-    float wave(int w, float bal) const {
-        const float t = (float)phase;
-        switch (w) {
-        case 0: return -std::cos(2.f * kPi * warp(t, bal));
-        case 2: return 2.f * warp(t, bal) - 1.f;
-        case 3: return 1.f - 2.f * warp(t, bal);
-        case 4: return t < clampf(bal, 0.02f, 0.98f) ? 1.f : -1.f;
-        case 5: return rndA + (rndB - rndA) * t;
-        case 6: return held;
-        default: { const float u = warp(t, bal); return u < 0.5f ? -1.f + 4.f * u : 3.f - 4.f * u; }
-        }
-    }
-    void advance(double inc) { phase += inc; if (phase >= 1.0) { phase -= std::floor(phase); rndA = rndB; rndB = rnd(); held = rnd(); } }
-};
-
 // ------------------------------------------------------------------ engine
 class Engine {
 public:
@@ -414,22 +368,15 @@ public:
     float sampleRate() const { return fs; }
 
     // ---------------------------------------------------------------- MIDI and transport
-    void noteOn(int note, int v) {
-        if (held < 16) stack[held++] = note;
-        lastNote = note; vel = v / 127.f;
-        for (int e = 0; e < kNumEg; ++e) if (p[ep(e, kETrigger)] < 0.5f) eg[e].gate(true);
-    }
-    void noteOff(int note) {
-        int j = 0; for (int i = 0; i < held; ++i) if (stack[i] != note) stack[j++] = stack[i];
-        held = j;
-        if (held > 0) lastNote = stack[held - 1];
-        else for (int e = 0; e < kNumEg; ++e) if (p[ep(e, kETrigger)] < 0.5f) eg[e].gate(false);
-    }
-    void allNotesOff() { held = 0; for (int e = 0; e < kNumEg; ++e) if (p[ep(e, kETrigger)] < 0.5f) eg[e].gate(false); }
-    void pitchBend(int v14) { bend = (v14 - 8192) / 8192.f; }
-    void modWheel(int v) { wheel = v / 127.f; }
-    void channelPressure(int v) { at = v / 127.f; }
-    void polyPressure(int note, int v) { if (note == lastNote) at = v / 127.f; }
+    void noteOn(int note, int v) { mods.noteOn(p, layout(), note, v); }
+    void noteOff(int note) { mods.noteOff(p, layout(), note); }
+    void allNotesOff() { mods.allNotesOff(p, layout()); }
+    void pitchBend(int v14) { mods.pitchBend(v14); }
+    void modWheel(int v) { mods.modWheel(v); }
+    void channelPressure(int v) { mods.channelPressure(v); }
+    void polyPressure(int note, int v) { mods.polyPressure(note, v); }
+    static const Layout& layout() { static const Layout L = { kXlfoFirst, kEgFirst, kEfFirst, kXyFirst, kSlotFirst, kNumSlots, kDstSlotFirst, kNumDests }; return L; }
+    double xlfoPhase(int l) const { return mods.xlfo[l].phase; }
     void setTransport(bool valid, bool playing, double barPos, double bpm) { tValid = valid; tPlaying = playing; tBarPos = barPos; tBpm = bpm > 1 ? bpm : 120; }
 
     // effective (modulated) value of a parameter, as used by the audio thread
@@ -447,8 +394,7 @@ public:
             // envelope followers and audio-triggered envelopes listen to the input (or the sidechain)
             const float aIn = std::max(std::fabs(inL[i]), std::fabs(inR[i]));
             const float aSc = (scL && scR) ? std::max(std::fabs(scL[i]), std::fabs(scR[i])) : 0.f;
-            for (int e = 0; e < kNumEf; ++e) { const float a = efSrc[e] ? aSc : aIn; efEnv[e] += (a > efEnv[e] ? efA[e] : efR[e]) * (a - efEnv[e]); }
-            inLevel += (aIn > inLevel ? 0.01f : 0.0005f) * (aIn - inLevel);
+            mods.follow(aIn, aSc);
             if (aIn > 1e-4f) silent = 0; else if (silent < 1 << 30) ++silent;
 
             // dry copy, delayed by the latency, for the global mix
@@ -530,7 +476,7 @@ private:
         for (auto& d : dry) std::fill(d.begin(), d.end(), 0.f);
         dryPos = 0; ctl = 0;
         for (int b = 0; b < kMaxBands; ++b) dynEnv[b] = 0;
-        for (int e = 0; e < kNumEf; ++e) efEnv[e] = 0;
+        mods.resetFollowers();
         control(); snapSmooth();
         if (linear) designLinear();
     }
@@ -549,61 +495,9 @@ private:
     // ---- control rate: modulation sources, matrix, coefficients ------------------
     void control() {
         const float cr = fs / kCtl;
-        // sources
-        const double bpm = tBpm;
-        for (int l = 0; l < kNumXlfo; ++l) {
-            const int sync = (int)std::round(p[lp_(l, kLSync)]);
-            double rate = effv[lp_(l, kLRate)];
-            if (sync > 0) {
-                const double bars = divBars((int)std::round(p[lp_(l, kLDiv)])) * syncFactor(sync);
-                rate = bpm / 60.0 / 4.0 / bars;
-                if (tValid && tPlaying) { xlfo[l].phase = std::fmod(tBarPos / bars, 1.0); if (xlfo[l].phase < 0) xlfo[l].phase += 1; }
-            }
-            xlfo[l].advance(rate / cr);
-            if (p[lp_(l, kLMode)] > 0.5f) {         // step sequencer
-                const int steps = (int)clampf(std::round(p[lp_(l, kLSteps)]), 1, kNumSteps);
-                const int st = std::min(steps - 1, (int)(xlfo[l].phase * steps));
-                const float target = clampf(p[lp_(l, kLStep1 + st)], -1.f, 1.f), gl = clampf(p[lp_(l, kLGlide)], 0.f, 1.f);
-                const float stepSecs = (float)(1.0 / std::max(rate, 1e-4) / steps);
-                const float c = gl < 0.01f ? 1.f : 1.f - std::exp(-1.f / std::max(gl * stepSecs * 0.5f * cr, 1.f));
-                xlfo[l].stepOut += (target - xlfo[l].stepOut) * c;
-                srcVal[kSrcXlfo1 + l] = xlfo[l].stepOut;
-            } else srcVal[kSrcXlfo1 + l] = xlfo[l].wave((int)std::round(p[lp_(l, kLWave)]), effv[lp_(l, kLBalance)]);
-        }
-        for (int e = 0; e < kNumEg; ++e) {
-            if (p[ep(e, kETrigger)] > 0.5f) {               // audio-triggered: the input crossing the threshold
-                const float thr = dbToGain(p[ep(e, kEThreshold)]);
-                if (!eg[e].gated() && inLevel > thr) eg[e].gate(true);
-                else if (eg[e].gated() && inLevel < thr * 0.7f) eg[e].gate(false);
-            }
-            eg[e].set(cr, effv[ep(e, kEAttack)], effv[ep(e, kEDecay)], effv[ep(e, kESustain)], effv[ep(e, kERelease)]);
-            srcVal[kSrcEg1 + e] = eg[e].process();
-        }
-        for (int e = 0; e < kNumEf; ++e) {
-            efA[e] = 1.f - std::exp(-1.f / (std::max(p[fp(e, kFAttack)], 0.0001f) * fs));
-            efR[e] = 1.f - std::exp(-1.f / (std::max(p[fp(e, kFRelease)], 0.001f) * fs));
-            efSrc[e] = p[fp(e, kFSource)] > 0.5f;
-            srcVal[kSrcEf1 + e] = clampf((gainToDb(efEnv[e]) + p[fp(e, kFGain)] + 54.f) / 54.f, 0.f, 1.f);
-        }
-        for (int x = 0; x < kNumXy; ++x) { srcVal[kSrcXy1X + 2 * x] = p[xyp(x, 0)]; srcVal[kSrcXy1Y + 2 * x] = p[xyp(x, 1)]; }
-        srcVal[kSrcVelocity] = vel; srcVal[kSrcKey] = lastNote < 0 ? 0.f : clampf((lastNote - 60) / 60.f, -1.f, 1.f);
-        srcVal[kSrcWheel] = wheel; srcVal[kSrcBend] = bend; srcVal[kSrcAftertouch] = at;
-        srcVal[kSrcNone] = 0;
-
-        // matrix: slot amounts first (a slot can modulate another slot's amount), then everything else
-        std::fill(modOff, modOff + kNumDests, 0.f);
-        int act[kNumSlots], na = 0;
-        for (int s = 0; s < kNumSlots; ++s) {
-            const int src = (int)std::round(p[sp(s, kSlotSrc)]), dst = (int)std::round(p[sp(s, kSlotDst)]);
-            if (src <= kSrcNone || src >= kNumSources || dst <= kDstNone || dst >= kNumDests || p[sp(s, kSlotBypass)] > 0.5f) continue;
-            act[na++] = s;
-        }
-        float amt[kNumSlots];
-        for (int s = 0; s < kNumSlots; ++s) amt[s] = p[sp(s, kSlotAmt)];
-        for (int k = 0; k < na; ++k) { const int s = act[k], dst = (int)std::round(p[sp(s, kSlotDst)]);
-            if (dst >= kDstSlotFirst) { const int t = dst - kDstSlotFirst; amt[t] = clampf(amt[t] + p[sp(s, kSlotAmt)] * srcVal[(int)std::round(p[sp(s, kSlotSrc)])], -1.f, 1.f); modOff[dst] += p[sp(s, kSlotAmt)] * srcVal[(int)std::round(p[sp(s, kSlotSrc)])]; } }
-        for (int k = 0; k < na; ++k) { const int s = act[k], dst = (int)std::round(p[sp(s, kSlotDst)]);
-            if (dst < kDstSlotFirst) modOff[dst] += amt[s] * srcVal[(int)std::round(p[sp(s, kSlotSrc)])]; }
+        mods.tick(p, effv, layout(), fs, cr, tValid, tPlaying, tBarPos, tBpm);
+        std::copy(mods.val, mods.val + kNumSources, srcVal);
+        matrix(p, layout(), srcVal, modOff);
         // effective values
         for (uint32_t i = 0; i < kParamCount; ++i) effv[i] = p[i];
         for (int d = 1; d < kDstSlotFirst; ++d) {
@@ -811,10 +705,7 @@ private:
     std::vector<float> dry[2]; int dryPos = 0;
     float sMix = 1, tMix = 1, sOut = 1, tOut = 1;
     // sources
-    Xlfo xlfo[kNumXlfo]; ADSR eg[kNumEg];
-    float efEnv[kNumEf] = {}, efA[kNumEf] = {}, efR[kNumEf] = {}; bool efSrc[kNumEf] = {};
-    float inLevel = 0; int silent = 0;
-    int stack[16] = {}, held = 0, lastNote = -1; float vel = 0, wheel = 0, bend = 0, at = 0;
+    Sources mods; int silent = 0;
     bool tValid = false, tPlaying = false; double tBarPos = 0, tBpm = 120;
 };
 
