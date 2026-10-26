@@ -129,7 +129,7 @@ inline const char* targetTip(int t) {
     case kTipA: case kTipB: return "Magma keeps two complete settings, A and B. Click the other letter to switch and compare.";
     case kTipCopy: return "Copies the current setting to the other slot.";
     case kTipPrev: return "Load the previous preset. The mouse wheel over the preset name also steps through presets.";
-    case kTipPresets: return "Open the preset browser. A * after the name means you have changed it.";
+    case kTipPresets: return "Open the preset browser. A * after the name means you have changed it. In the browser, type to search names and categories, and click a star to keep a preset in Favourites.";
     case kTipNext: return "Load the next preset.";
     case kTipDisplay: return "The spectrum (input faint, output bright) with your bands. Click a band to edit it. Double-click to split a band in two at that frequency (up to six). Drag a band up and down to change its drive.";
     case kTipDivider: return "A crossover between two bands. Drag it left and right. Right-click to remove it and merge the two bands.";

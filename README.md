@@ -113,6 +113,7 @@ Drive is **level-compensated**: every style stays within about 2 dB of the input
 - Smoothed, sample-accurate automation (420 parameters)
 - Resizable interface
 - **59 factory presets** in seven categories, plus user presets
+- The preset browser **searches** names and categories as you type, and a star keeps a preset in **Favourites**.
 - **Hover tips** everywhere, a **HELP window**, and a **[full manual](docs/MANUAL.md)** (also in every release zip as `Magma-Manual.html`)
 
 ### Compared with FabFilter Saturn 2
@@ -206,6 +207,7 @@ Release checks:
 
 ## Changelog
 
+- **Unreleased:** the preset browser searches names and categories as you type, and keeps Favourites.
 - **2.0:** Brings Magma up to Saturn 2. New in this version:
   - Twelve new styles (28 in all); the Experimental family is renamed FX.
   - Linear-phase crossovers.
