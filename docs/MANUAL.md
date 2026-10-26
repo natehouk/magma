@@ -1,4 +1,4 @@
-# Magma 2.0 — User Manual
+# Magma 2.1 — User Manual
 
 Magma is a multiband distortion. It splits the sound into up to six frequency bands and drives each band through its own distortion. There are 28 styles, from subtle tube and tape warmth to guitar amps, transformer saturation, bit crushing, ring modulation, octave effects and wavefolding. Each band has its own dynamics, feedback, tone, mix, level and pan.
 

@@ -337,7 +337,7 @@ protected:
         beginPath(); moveTo(26, 27); lineTo(24, 40); moveTo(35, 24); lineTo(37, 41); strokeColor(withAlpha(Color(0xff, 0xb1, 0x3d), 0.8f)); strokeWidth(1.2f); stroke();
         fontSize(22); textLetterSpacing(9); fillColor(C_TEXT); textAlign(ALIGN_LEFT | ALIGN_MIDDLE); text(56, 33, "MAGMA", nullptr);
         fontSize(9); textLetterSpacing(2.2f); fillColor(C_DIM); text(196, 28, "MULTIBAND DISTORTION", nullptr);
-        fontSize(7); textLetterSpacing(1.1f); fillColor(C_FAINT); text(196, 40, "EPSILON AUDIO 2.0", nullptr);
+        fontSize(7); textLetterSpacing(1.1f); fillColor(C_FAINT); text(196, 40, "EPSILON AUDIO 2.1", nullptr);
         drawPresetBar();
         for (int k = 0; k < 2; ++k) {
             const float x = A_X + k * AB_W; const bool on = abSlot == k, hot = hoverHeader == 6 + k;
